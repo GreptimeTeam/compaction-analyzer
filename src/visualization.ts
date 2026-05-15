@@ -228,6 +228,7 @@ export function createVisualization(canvas: HTMLCanvasElement, files: AliveFile[
 
   // Total height of all tracks (for bottom-up layout)
   const allTracksHeight = layout.tracks.reduce((s, t) => s + t.height + TRACK_GAP, 0) - TRACK_GAP
+  function layoutBottom() { return MARGIN_TOP + getDrawableH() }
 
   function timeToX(t: number) {
     return MARGIN_LEFT + ((t - viewStart) / timeSpan()) * getDrawableW()
@@ -263,7 +264,7 @@ export function createVisualization(canvas: HTMLCanvasElement, files: AliveFile[
 
     // ── Track backgrounds ──
     for (let i = 0; i < layout.tracks.length; i++) {
-      const ty = MARGIN_TOP + trackY(i) - scrollTop
+      const ty = layoutBottom() - allTracksHeight + trackY(i) - scrollTop
       const th = layout.tracks[i].height
       if (ty + th < MARGIN_TOP || ty > MARGIN_TOP + dh) continue
       ctx.fillStyle = i % 2 === 0 ? 'rgba(255,255,255,0.015)' : 'rgba(0,0,0,0.05)'
@@ -279,7 +280,7 @@ export function createVisualization(canvas: HTMLCanvasElement, files: AliveFile[
     for (const p of layout.placed) {
       const bx = timeToX(p.x)
       const bw = Math.max(BAR_MIN_WIDTH_PX, (p.width / timeSpan()) * dw)
-      const by = MARGIN_TOP + trackY(p.track) + layout.tracks[p.track].height - p.height - scrollTop
+      const by = layoutBottom() - allTracksHeight + trackY(p.track) + layout.tracks[p.track].height - p.height - scrollTop
 
       if (bx + bw < MARGIN_LEFT || bx > MARGIN_LEFT + dw) continue
       if (by + p.height < MARGIN_TOP || by > MARGIN_TOP + dh) continue
@@ -468,7 +469,7 @@ export function createVisualization(canvas: HTMLCanvasElement, files: AliveFile[
     for (const p of layout.placed) {
       const bx = timeToX(p.x)
       const bw = Math.max(BAR_MIN_WIDTH_PX, (p.width / timeSpan()) * dw)
-      const by = MARGIN_TOP + trackY(p.track) + layout.tracks[p.track].height - p.height - scrollTop
+      const by = layoutBottom() - allTracksHeight + trackY(p.track) + layout.tracks[p.track].height - p.height - scrollTop
       if (mx >= bx && mx <= bx + bw && my >= by && my <= by + p.height) return p.file
     }
     return null
