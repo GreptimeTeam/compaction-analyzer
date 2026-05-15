@@ -15,20 +15,26 @@ export default defineComponent({
     const canvasRef = ref<HTMLCanvasElement | null>(null)
     const tooltipFile = ref<AliveFile | null>(null)
     const tooltipPos = ref({ x: 0, y: 0 })
+    const isZoomed = ref(false)
     let viz: ReturnType<typeof createVisualization> | null = null
 
     function initViz() {
-      if (viz) {
-        viz.destroy()
-        viz = null
-      }
+      if (viz) { viz.destroy(); viz = null }
+      isZoomed.value = false
       if (canvasRef.value && props.files.length > 0) {
         viz = createVisualization(canvasRef.value, props.files)
         viz.onHover((file, pos) => {
           tooltipFile.value = file
           tooltipPos.value = pos
         })
+        viz.onZoom((_start, _end, _resetFn, zoomed) => {
+          isZoomed.value = zoomed
+        })
       }
+    }
+
+    function handleResetZoom() {
+      if (viz) viz.resetZoom()
     }
 
     onMounted(initViz)
@@ -44,7 +50,7 @@ export default defineComponent({
       }
     }
 
-    return { canvasRef, tooltipFile, tooltipPos, formatBytes, formatDuration, formatSource }
+    return { canvasRef, tooltipFile, tooltipPos, isZoomed, handleResetZoom, formatBytes, formatDuration, formatSource }
   }
 })
 </script>
@@ -68,7 +74,8 @@ export default defineComponent({
       <span class="legend-item">
         <span class="legend-swatch" style="background: #e2844a"></span> Overlapping
       </span>
-      <span class="hint">Scroll to pan &middot; Ctrl+scroll to zoom</span>
+      <span class="hint">Drag to select time range &middot; Scroll to pan &middot; Ctrl+scroll to zoom &middot; Double-click to reset</span>
+      <button v-if="isZoomed" class="reset-zoom-btn" @click="handleResetZoom">Reset zoom</button>
     </div>
 
     <div
@@ -160,6 +167,23 @@ canvas {
   font-size: 11px;
 }
 
+.reset-zoom-btn {
+  padding: 4px 12px;
+  background: var(--primary);
+  color: white;
+  border: none;
+  border-radius: 4px;
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.reset-zoom-btn:hover {
+  background: var(--primary-hover);
+}
+
 .tooltip {
   position: fixed;
   z-index: 1000;
@@ -192,7 +216,7 @@ canvas {
 
 .tooltip-label {
   color: var(--text-muted);
-  min-width: 70px;
+  min-width: 80px;
   flex-shrink: 0;
 }
 </style>
