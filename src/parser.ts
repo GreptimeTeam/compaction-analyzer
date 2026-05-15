@@ -1,0 +1,390 @@
+/**
+ * CSV and log file parsers.
+ * Ports the Rust parser.rs and list_files.rs logic to TypeScript.
+ */
+import type { AliveFile } from './types'
+
+export type InputMode = 'alive-file-list' | 'compaction-log'
+
+export interface ParseResult {
+  aliveFiles: AliveFile[]
+}
+
+export interface AnalysisResult {
+  totalFiles: number
+  totalSizeBytes: number
+  overlappingFiles: number
+  maxOverlapDepth: number
+  avgOverlapDepth: number
+  sizeCv: number
+  sourceBreakdown: Record<string, number>
+  sizeDistribution: Array<{ label: string; count: number }>
+}
+
+// ── Alive file list CSV parser ──
+
+export function parseAliveFileListCsv(csv: string): ParseResult {
+  const lines = csv.split('\n').filter(l => l.trim())
+  if (lines.length < 2) throw new Error('CSV must have a header and at least one data row')
+
+  const header = splitCsvLine(lines[0])
+  const colIndex: Record<string, number> = {}
+  header.forEach((name, i) => { colIndex[name.trim()] = i })
+
+  const requiredCols = ['file_id', 'region_id', 'table_id', 'file_size', 'min_ts', 'max_ts', 'visible']
+  for (const col of requiredCols) {
+    if (!(col in colIndex)) throw new Error(`Missing required CSV column: ${col}`)
+  }
+
+  const aliveFiles: AliveFile[] = []
+  for (let i = 1; i < lines.length; i++) {
+    const fields = splitCsvLine(lines[i])
+    if (fields.length < header.length) continue
+
+    const visible = getField(fields, colIndex, 'visible', i + 1).trim()
+    if (visible !== 'true') continue
+
+    const fileId = getField(fields, colIndex, 'file_id', i + 1).trim()
+    const regionId = parseNumField(fields, colIndex, 'region_id', i + 1)
+    const tableId = parseNumField(fields, colIndex, 'table_id', i + 1)
+    const sizeBytes = parseNumField(fields, colIndex, 'file_size', i + 1)
+    const minTs = parseUnixNanos(getField(fields, colIndex, 'min_ts', i + 1), i + 1)
+    const maxTs = parseUnixNanos(getField(fields, colIndex, 'max_ts', i + 1), i + 1)
+
+    aliveFiles.push({
+      fileId,
+      regionId,
+      tableId,
+      createdAt: minTs,
+      source: 'list-file',
+      sizeBytes,
+      timeRange: [minTs, maxTs],
+    })
+  }
+
+  aliveFiles.sort((a, b) => a.fileId.localeCompare(b.fileId))
+  return { aliveFiles }
+}
+
+// ── Compaction log parser ──
+
+export function parseLogCsv(log: string): ParseResult {
+  const lines = log.split('\n').filter(l => l.trim())
+  const aliveMap = new Map<string, AliveFile>()
+
+  for (const line of lines) {
+    if (line.includes('Compacted SST files')) {
+      parseCompactionLine(line, aliveMap)
+    } else if (line.includes('Applying RegionEdit')) {
+      parseRegionEditLine(line, aliveMap)
+    } else if (line.includes('Successfully flush memtables')) {
+      parseFlushLine(line, aliveMap)
+    }
+  }
+
+  const aliveFiles = [...aliveMap.values()]
+  aliveFiles.sort((a, b) => a.fileId.localeCompare(b.fileId))
+  return { aliveFiles }
+}
+
+interface FileStats {
+  fileId: string
+  sizeBytes: number
+  timeRange: [number, number]
+}
+
+function parseCompactionLine(line: string, alive: Map<string, AliveFile>): void {
+  const timestamp = extractTimestamp(line)
+  if (!timestamp) return
+
+  const regionMatch = line.match(/region_id:\s*(\d+)\((\d+),\s*\d+\)/)
+  if (!regionMatch) return
+  const regionId = parseInt(regionMatch[1])
+  const tableId = parseInt(regionMatch[2])
+
+  const inputStart = line.indexOf('input: [')
+  const outputMarker = '], output: ['
+  const outputIdx = line.indexOf(outputMarker)
+  const windowMarker = '], window:'
+  const windowIdx = line.lastIndexOf(windowMarker)
+
+  if (inputStart < 0 || outputIdx < 0 || windowIdx < 0) return
+
+  const inputFiles = parseFileStatsSection(line.slice(inputStart + 8, outputIdx))
+  const outputFiles = parseFileStatsSection(line.slice(outputIdx + outputMarker.length, windowIdx))
+
+  if (!inputFiles || !outputFiles) return
+
+  // Remove input files from alive set
+  for (const f of inputFiles) {
+    alive.delete(f.fileId)
+  }
+
+  // Add output files
+  for (const f of outputFiles) {
+    alive.set(f.fileId, {
+      fileId: f.fileId,
+      regionId,
+      tableId,
+      createdAt: timestamp,
+      source: 'compaction',
+      sizeBytes: f.sizeBytes,
+      timeRange: f.timeRange,
+    })
+  }
+}
+
+function parseRegionEditLine(line: string, alive: Map<string, AliveFile>): void {
+  const timestamp = extractTimestamp(line)
+  if (!timestamp) return
+
+  const regionMatch = line.match(/to region\s*(\d+)\((\d+),\s*\d+\)/)
+  if (!regionMatch) return
+  const regionId = parseInt(regionMatch[1])
+  const tableId = parseInt(regionMatch[2])
+
+  const addStart = line.indexOf('files_to_add: [')
+  const removeMarker = '], files_to_remove:'
+  const addEnd = line.indexOf(removeMarker)
+  if (addStart < 0 || addEnd < 0) return
+
+  const files = parseFileStatsSection(line.slice(addStart + 15, addEnd))
+  if (!files) return
+
+  for (const f of files) {
+    const existing = alive.get(f.fileId)
+    if (existing) {
+      existing.sizeBytes = f.sizeBytes
+      existing.timeRange = f.timeRange
+    } else {
+      alive.set(f.fileId, {
+        fileId: f.fileId,
+        regionId,
+        tableId,
+        createdAt: timestamp,
+        source: 'flush',
+        sizeBytes: f.sizeBytes,
+        timeRange: f.timeRange,
+      })
+    }
+  }
+}
+
+function parseFlushLine(line: string, alive: Map<string, AliveFile>): void {
+  const timestamp = extractTimestamp(line)
+  if (!timestamp) return
+
+  const regionMatch = line.match(/region:\s*(\d+)\((\d+),\s*\d+\)/)
+  if (!regionMatch) return
+  const regionId = parseInt(regionMatch[1])
+  const tableId = parseInt(regionMatch[2])
+
+  const filesStart = line.indexOf('files: [')
+  if (filesStart < 0) return
+  const bracketEnd = line.indexOf(']', filesStart)
+  if (bracketEnd < 0) return
+
+  const fileSection = line.slice(filesStart + 8, bracketEnd)
+  const fileRegex = /FileId\(([0-9a-f-]+)\)/g
+  let match
+  while ((match = fileRegex.exec(fileSection)) !== null) {
+    const fileId = match[1]
+    alive.set(fileId, {
+      fileId,
+      regionId,
+      tableId,
+      createdAt: timestamp,
+      source: 'flush',
+      sizeBytes: null,
+      timeRange: null,
+    })
+  }
+}
+
+function parseFileStatsSection(section: string): FileStats[] | null {
+  const fileRegex = /file_id:\s*([0-9a-f-]+)\s*,\s*time_range:\s*\(([^,]+),\s*([^\)]+)\)\s*,\s*level:\s*\d+,\s*file_size:\s*([0-9.]+)([KMG]iB)/g
+  const files: FileStats[] = []
+  let match
+
+  while ((match = fileRegex.exec(section)) !== null) {
+    const fileId = match[1]
+    const start = parseLogTime(match[2].trim())
+    const end = parseLogTime(match[3].trim())
+    const sizeBytes = parseSize(match[4], match[5])
+
+    if (start === null || end === null || sizeBytes === null) continue
+
+    files.push({ fileId, sizeBytes, timeRange: [start, end] })
+  }
+
+  return files.length > 0 ? files : null
+}
+
+function extractTimestamp(line: string): number | null {
+  const ts = line.split(/\s+/)[0]
+  return parseLogTime(ts)
+}
+
+function parseLogTime(value: string): number | null {
+  // Handle formats like "2026-01-09 13:29:42.016+0000" or "2026-01-09T13:29:42.016+00:00"
+  let normalized = value.replace(' ', 'T')
+  // Ensure timezone has colon: +0000 -> +00:00
+  normalized = normalized.replace(/([+-]\d{2})(\d{2})$/, '$1:$2')
+  // If no timezone, add Z
+  if (!/[+-]\d{2}:\d{2}$/.test(normalized) && !normalized.endsWith('Z')) {
+    normalized += 'Z'
+  }
+  const ms = new Date(normalized).getTime()
+  return isNaN(ms) ? null : ms
+}
+
+function parseSize(value: string, unit: string): number | null {
+  const multipliers: Record<string, number> = {
+    'KiB': 1024,
+    'MiB': 1024 * 1024,
+    'GiB': 1024 * 1024 * 1024,
+  }
+  const multiplier = multipliers[unit]
+  if (!multiplier) return null
+  const parsed = parseFloat(value)
+  return isNaN(parsed) ? null : Math.round(parsed * multiplier)
+}
+
+// ── CSV helpers ──
+
+function splitCsvLine(line: string): string[] {
+  return line.split(',').map(f => f.trim())
+}
+
+function getField(fields: string[], colIndex: Record<string, number>, name: string, lineNum: number): string {
+  const idx = colIndex[name]
+  if (idx === undefined) throw new Error(`Missing CSV column '${name}'`)
+  if (idx >= fields.length) throw new Error(`Missing '${name}' value on CSV line ${lineNum}`)
+  return fields[idx]
+}
+
+function parseNumField(fields: string[], colIndex: Record<string, number>, name: string, lineNum: number): number {
+  const raw = getField(fields, colIndex, name, lineNum).trim()
+  const value = parseFloat(raw)
+  if (isNaN(value)) throw new Error(`Invalid '${name}' value on CSV line ${lineNum}: ${raw}`)
+  return value
+}
+
+function parseUnixNanos(value: string, lineNum: number): number {
+  const trimmed = value.trim()
+  // Handle nanosecond timestamps - may be too large for JS number
+  // Parse as string to avoid precision loss
+  const nanos = parseInt(trimmed, 10)
+  if (isNaN(nanos)) throw new Error(`Invalid timestamp on CSV line ${lineNum}: ${value}`)
+  // Convert nanoseconds to milliseconds
+  return Math.floor(nanos / 1_000_000)
+}
+
+// ── Analysis ──
+
+export function analyze(files: AliveFile[]): AnalysisResult {
+  const withRange = files.filter(f => f.timeRange && f.sizeBytes !== null)
+
+  // Overlap detection
+  const overlapIds = new Set<string>()
+  for (let i = 0; i < withRange.length; i++) {
+    const a = withRange[i]
+    const [aStart, aEnd] = a.timeRange!
+    const aIsPoint = aStart === aEnd
+    for (let j = i + 1; j < withRange.length; j++) {
+      const b = withRange[j]
+      const [bStart, bEnd] = b.timeRange!
+      const bIsPoint = bStart === bEnd
+      const overlaps = (aIsPoint || bIsPoint)
+        ? aStart <= bEnd && bStart <= aEnd
+        : aStart < bEnd && bStart < aEnd
+      if (overlaps) {
+        overlapIds.add(a.fileId)
+        overlapIds.add(b.fileId)
+      }
+    }
+  }
+
+  // Overlap depth via sweep-line
+  const events: Array<[number, number]> = []
+  for (const f of withRange) {
+    const [s, e] = f.timeRange!
+    if (s < e) {
+      events.push([s, 1])
+      events.push([e, -1])
+    }
+  }
+  events.sort((a, b) => a[0] - b[0] || a[1] - b[1])
+
+  let depth = 0
+  let maxDepth = 0
+  let prevTime: number | null = null
+  let coveredMs = 0
+  let depthMs = 0
+
+  for (const [time, delta] of events) {
+    if (prevTime !== null && depth > 0) {
+      const span = time - prevTime
+      if (span > 0) {
+        coveredMs += span
+        depthMs += span * depth
+      }
+    }
+    depth += delta
+    maxDepth = Math.max(maxDepth, depth)
+    prevTime = time
+  }
+
+  const avgDepth = coveredMs > 0 ? depthMs / coveredMs : 0
+
+  // Size CV
+  const sizes = withRange.map(f => f.sizeBytes!).filter(s => s != null)
+  let sizeCv = 0
+  if (sizes.length >= 2) {
+    const mean = sizes.reduce((a, b) => a + b, 0) / sizes.length
+    if (mean > 0) {
+      const variance = sizes.reduce((acc, s) => acc + (s - mean) ** 2, 0) / sizes.length
+      sizeCv = Math.sqrt(variance) / mean
+    }
+  }
+
+  // Source breakdown
+  const sourceBreakdown: Record<string, number> = {}
+  for (const f of files) {
+    sourceBreakdown[f.source] = (sourceBreakdown[f.source] || 0) + 1
+  }
+
+  // Size distribution (log-scale buckets)
+  const sizeDistribution = buildSizeDistribution(withRange.map(f => f.sizeBytes!))
+
+  return {
+    totalFiles: files.length,
+    totalSizeBytes: files.reduce((sum, f) => sum + (f.sizeBytes ?? 0), 0),
+    overlappingFiles: overlapIds.size,
+    maxOverlapDepth: maxDepth,
+    avgOverlapDepth: avgDepth,
+    sizeCv,
+    sourceBreakdown,
+    sizeDistribution,
+  }
+}
+
+function buildSizeDistribution(sizes: number[]): Array<{ label: string; count: number }> {
+  if (sizes.length === 0) return []
+
+  const buckets = [
+    { min: 0, max: 1024, label: '<1 KiB' },
+    { min: 1024, max: 10240, label: '1-10 KiB' },
+    { min: 10240, max: 102400, label: '10-100 KiB' },
+    { min: 102400, max: 1048576, label: '100 KiB-1 MiB' },
+    { min: 1048576, max: 10485760, label: '1-10 MiB' },
+    { min: 10485760, max: 104857600, label: '10-100 MiB' },
+    { min: 104857600, max: 1073741824, label: '100 MiB-1 GiB' },
+    { min: 1073741824, max: Infinity, label: '>1 GiB' },
+  ]
+
+  return buckets.map(b => ({
+    label: b.label,
+    count: sizes.filter(s => s >= b.min && s < b.max).length,
+  })).filter(b => b.count > 0)
+}
