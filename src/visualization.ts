@@ -92,7 +92,7 @@ function buildLayout(files: AliveFile[]): LayoutResult {
     return { placed: [], tracks: [], totalHeight: 0, minTime: 0, maxTime: 0, allFiles: files }
   }
 
-  // Track assignment: greedy first-fit
+  // Greedy first-fit track assignment: only advance to next track on overlap
   interface TrackEnd { endTime: number; maxBytes: number }
   const trackEnds: TrackEnd[] = []
   const assignments: Array<{ file: AliveFile; track: number }> = []
@@ -120,23 +120,23 @@ function buildLayout(files: AliveFile[]): LayoutResult {
     assignments.push({ file, track: assigned })
   }
 
-  // Build track layout
-  const TRACK_BASE = 32
-  const BYTES_TO_HEIGHT = 0.004
-  const MAX_TRACK_HEIGHT = 160
+  // Track height: based on largest file in each track
+  const TRACK_BASE = 20
+  const BYTES_TO_HEIGHT = 0.003
+  const MAX_TRACK_HEIGHT = 120
   const tracks: TrackLayout[] = trackEnds.map(t => ({
     height: Math.min(MAX_TRACK_HEIGHT, Math.max(TRACK_BASE, t.maxBytes * BYTES_TO_HEIGHT)),
     maxBytes: t.maxBytes,
   }))
 
-  const trackYOffsets: number[] = []
   let yAccum = 0
+  const trackYOffsets: number[] = []
   for (const t of tracks) {
     trackYOffsets.push(yAccum)
     yAccum += t.height + TRACK_GAP
   }
 
-  // Place files
+  // Place files — bar height proportional to file size within the track
   const placed: PlacedItem[] = assignments.map(({ file, track }) => {
     const [start, end] = file.timeRange!
     const trackH = tracks[track].height
@@ -226,15 +226,19 @@ export function createVisualization(canvas: HTMLCanvasElement, files: AliveFile[
   function getDrawableH() { return canvas.height / dpr - MARGIN_TOP - MARGIN_BOTTOM }
   function timeSpan() { return viewEnd - viewStart }
 
+  // Total height of all tracks (for bottom-up layout)
+  const allTracksHeight = layout.tracks.reduce((s, t) => s + t.height + TRACK_GAP, 0) - TRACK_GAP
+
   function timeToX(t: number) {
     return MARGIN_LEFT + ((t - viewStart) / timeSpan()) * getDrawableW()
   }
   function xToTime(x: number) {
     return viewStart + ((x - MARGIN_LEFT) / getDrawableW()) * timeSpan()
   }
+  // Track 0 at bottom, higher tracks stack upward
   function trackY(track: number) {
-    let y = 0
-    for (let i = 0; i < track; i++) y += layout.tracks[i].height + TRACK_GAP
+    let y = allTracksHeight
+    for (let i = 0; i <= track; i++) y -= layout.tracks[i].height + (i > 0 ? TRACK_GAP : 0)
     return y
   }
 
@@ -275,7 +279,7 @@ export function createVisualization(canvas: HTMLCanvasElement, files: AliveFile[
     for (const p of layout.placed) {
       const bx = timeToX(p.x)
       const bw = Math.max(BAR_MIN_WIDTH_PX, (p.width / timeSpan()) * dw)
-      const by = MARGIN_TOP + trackY(p.track) + (layout.tracks[p.track].height - p.height) / 2 - scrollTop
+      const by = MARGIN_TOP + trackY(p.track) + layout.tracks[p.track].height - p.height - scrollTop
 
       if (bx + bw < MARGIN_LEFT || bx > MARGIN_LEFT + dw) continue
       if (by + p.height < MARGIN_TOP || by > MARGIN_TOP + dh) continue
@@ -464,7 +468,7 @@ export function createVisualization(canvas: HTMLCanvasElement, files: AliveFile[
     for (const p of layout.placed) {
       const bx = timeToX(p.x)
       const bw = Math.max(BAR_MIN_WIDTH_PX, (p.width / timeSpan()) * dw)
-      const by = MARGIN_TOP + trackY(p.track) + (layout.tracks[p.track].height - p.height) / 2 - scrollTop
+      const by = MARGIN_TOP + trackY(p.track) + layout.tracks[p.track].height - p.height - scrollTop
       if (mx >= bx && mx <= bx + bw && my >= by && my <= by + p.height) return p.file
     }
     return null
