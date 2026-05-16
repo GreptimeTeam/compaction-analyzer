@@ -189,7 +189,7 @@ body {
   display: flex;
   flex-direction: column;
   height: 100vh;
-  max-width: 1600px;
+  max-width: 90vw;
   margin: 0 auto;
 }
 
