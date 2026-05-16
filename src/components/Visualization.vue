@@ -94,6 +94,10 @@ export default defineComponent({
       }
     }
 
+    function focusFile(fileId: string | null) {
+      if (viz) viz.focusFile(fileId)
+    }
+
     onMounted(initViz)
     watch(() => props.files, initViz, { deep: false })
     onBeforeUnmount(() => { if (viz) viz.destroy() })
@@ -107,7 +111,7 @@ export default defineComponent({
       }
     }
 
-    return { canvasRef, tooltipFile, tooltipPos, isZoomed, hasMarkers, gridInput, currentTickMs, formatTickMs, handleResetZoom, handleClearMarkers, handleGridChange, formatBytes, formatDuration, formatSource }
+    return { canvasRef, tooltipFile, tooltipPos, isZoomed, hasMarkers, gridInput, currentTickMs, formatTickMs, handleResetZoom, handleClearMarkers, handleGridChange, formatBytes, formatDuration, formatSource, focusFile }
   }
 })
 </script>

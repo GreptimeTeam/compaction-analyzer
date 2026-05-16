@@ -17,6 +17,8 @@ export default defineComponent({
     const analysisResult = shallowRef<AnalysisResult | null>(null)
     const selectedFile = shallowRef<AliveFile | null>(null)
     const vizKey = ref(0)
+    const searchQuery = ref('')
+    const vizRef = ref<InstanceType<typeof Visualization> | null>(null)
 
     const regionIds = computed(() => {
       const regions = new Set<string>()
@@ -54,6 +56,7 @@ export default defineComponent({
       allFiles.value = map
       regionFilter.value = ''
       tableFilter.value = ''
+      searchQuery.value = ''
       applyFilters()
     }
 
@@ -71,6 +74,16 @@ export default defineComponent({
       selectedFile.value = file
     }
 
+    function handleSearch() {
+      const q = searchQuery.value.trim()
+      if (!q) { vizRef.value?.focusFile(null); return }
+      const match = filteredFiles.value.find(f => f.fileId.includes(q))
+      if (match) {
+        vizRef.value?.focusFile(match.fileId)
+        selectedFile.value = match
+      }
+    }
+
     return {
       filteredFiles,
       regionFilter,
@@ -80,10 +93,13 @@ export default defineComponent({
       analysisResult,
       selectedFile,
       vizKey,
+      searchQuery,
+      vizRef,
       handleFilesLoaded,
       handleRegionChange,
       handleTableChange,
       handleFileSelected,
+      handleSearch,
     }
   }
 })
@@ -119,6 +135,16 @@ export default defineComponent({
               {{ filteredFiles.length }} alive files
             </div>
           </div>
+          <div class="toolbar-search">
+            <input
+              v-model="searchQuery"
+              class="search-input"
+              placeholder="Find file..."
+              spellcheck="false"
+              @keydown.enter="handleSearch"
+            />
+            <button class="search-btn" @click="handleSearch">Find</button>
+          </div>
           <div class="toolbar-filters">
             <div class="filter-group" v-if="regionIds.length > 1">
               <label>Region:</label>
@@ -139,7 +165,7 @@ export default defineComponent({
 
         <div class="content">
           <div class="viz-container">
-            <Visualization :files="filteredFiles" :key="vizKey" @file-selected="handleFileSelected" />
+            <Visualization ref="vizRef" :files="filteredFiles" :key="vizKey" @file-selected="handleFileSelected" />
           </div>
           <div class="metrics-container">
             <MetricsPanel :files="filteredFiles" :analysis="analysisResult" :selected-file="selectedFile" />
@@ -285,6 +311,45 @@ body {
   color: var(--text-secondary);
   font-size: 13px;
   font-family: var(--font-mono);
+}
+
+.toolbar-search {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.search-input {
+  padding: 4px 10px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  font-family: inherit;
+  font-size: 13px;
+  width: 160px;
+  outline: none;
+}
+
+.search-input:focus {
+  border-color: var(--primary);
+}
+
+.search-btn {
+  padding: 4px 12px;
+  background: var(--primary);
+  color: white;
+  border: none;
+  border-radius: 4px;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.search-btn:hover {
+  background: var(--primary-hover);
 }
 
 .filter-group {

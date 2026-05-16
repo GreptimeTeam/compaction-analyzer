@@ -39,6 +39,8 @@ const COLOR_ACCENT_STRIPE = 'rgba(255,255,255,0.25)'
 const COLOR_HOVER_GLOW = 'rgba(245, 158, 11, 0.4)'
 const COLOR_SELECTION = 'rgba(74, 144, 226, 0.15)'
 const COLOR_SELECTION_BORDER = 'rgba(74, 144, 226, 0.6)'
+const COLOR_FOCUSED = '#f59e0b'
+const COLOR_FOCUSED_GLOW = 'rgba(245, 158, 11, 0.5)'
 
 interface PlacedItem {
   file: AliveFile
@@ -226,6 +228,7 @@ export function createVisualization(canvas: HTMLCanvasElement, files: AliveFile[
   let timeMarkerA: number | null = null
   let timeMarkerB: number | null = null
   let manualTickInterval: number | null = null  // null = auto
+  let focusedFileId: string | null = null
   let onHoverCallback: ((file: AliveFile | null, pos: { x: number; y: number }) => void) | null = null
   let onZoomChange: ((start: number, end: number, reset: () => void, isZoomed: boolean) => void) | null = null
   let onMarkersChange: ((a: number | null, b: number | null) => void) | null = null
@@ -337,8 +340,11 @@ export function createVisualization(canvas: HTMLCanvasElement, files: AliveFile[
       const isOv = overlapSet.has(p.file.fileId)
       const isHov = p.file === hoveredFile
       const isHoverOv = hoverOvIds?.has(p.file.fileId) ?? false
+      const isFocused = p.file.fileId === focusedFileId
       let color: string
-      if (isHov) {
+      if (isFocused) {
+        color = COLOR_FOCUSED
+      } else if (isHov) {
         color = isOv ? COLOR_OVERLAP : getBaseColor(p.file)
       } else if (isHoverOv) {
         color = '#c084fc' // purple highlight for overlapping files
@@ -362,6 +368,18 @@ export function createVisualization(canvas: HTMLCanvasElement, files: AliveFile[
         ctx.shadowBlur = 12
         ctx.strokeStyle = 'rgba(245, 158, 11, 0.8)'
         ctx.lineWidth = 2
+        drawRoundedRect(ctx, bx, by, bw, bh, BAR_RADIUS)
+        ctx.stroke()
+        ctx.restore()
+      }
+
+      // Focused file glow
+      if (isFocused && !isHov) {
+        ctx.save()
+        ctx.shadowColor = COLOR_FOCUSED_GLOW
+        ctx.shadowBlur = 16
+        ctx.strokeStyle = COLOR_FOCUSED
+        ctx.lineWidth = 2.5
         drawRoundedRect(ctx, bx, by, bw, bh, BAR_RADIUS)
         ctx.stroke()
         ctx.restore()
@@ -761,6 +779,21 @@ export function createVisualization(canvas: HTMLCanvasElement, files: AliveFile[
     render()
   }
 
+  function focusFile(fileId: string | null) {
+    focusedFileId = fileId
+    if (!fileId) { render(); return }
+    const placed = layout.placed.find(p => p.file.fileId === fileId)
+    if (!placed) { render(); return }
+    const [start, end] = placed.file.timeRange!
+    const fileSpan = end - start || 1
+    const padding = Math.max(fileSpan * 2, timeSpan() * 0.1)
+    viewStart = start - padding
+    viewEnd = end + padding
+    clampView()
+    render()
+    notifyZoom()
+  }
+
   function onMouseLeave() {
     hoveredFile = null
     if (isDragging) { isDragging = false; selStart = null; selEnd = null }
@@ -800,6 +833,7 @@ export function createVisualization(canvas: HTMLCanvasElement, files: AliveFile[
     },
     clearMarkers,
     setTickInterval,
+    focusFile,
     onMarkersChange(cb: (a: number | null, b: number | null) => void) {
       onMarkersChange = cb
     },
