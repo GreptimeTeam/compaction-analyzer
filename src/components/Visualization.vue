@@ -16,11 +16,13 @@ export default defineComponent({
     const tooltipFile = ref<AliveFile | null>(null)
     const tooltipPos = ref({ x: 0, y: 0 })
     const isZoomed = ref(false)
+    const hasMarkers = ref(false)
     let viz: ReturnType<typeof createVisualization> | null = null
 
     function initViz() {
       if (viz) { viz.destroy(); viz = null }
       isZoomed.value = false
+      hasMarkers.value = false
       if (canvasRef.value && props.files.length > 0) {
         viz = createVisualization(canvasRef.value, props.files)
         viz.onHover((file, pos) => {
@@ -30,11 +32,18 @@ export default defineComponent({
         viz.onZoom((_start, _end, _resetFn, zoomed) => {
           isZoomed.value = zoomed
         })
+        viz.onMarkersChange((a, b) => {
+          hasMarkers.value = a !== null
+        })
       }
     }
 
     function handleResetZoom() {
       if (viz) viz.resetZoom()
+    }
+
+    function handleClearMarkers() {
+      if (viz) viz.clearMarkers()
     }
 
     onMounted(initViz)
@@ -50,7 +59,7 @@ export default defineComponent({
       }
     }
 
-    return { canvasRef, tooltipFile, tooltipPos, isZoomed, handleResetZoom, formatBytes, formatDuration, formatSource }
+    return { canvasRef, tooltipFile, tooltipPos, isZoomed, hasMarkers, handleResetZoom, handleClearMarkers, formatBytes, formatDuration, formatSource }
   }
 })
 </script>
@@ -74,7 +83,8 @@ export default defineComponent({
       <span class="legend-item">
         <span class="legend-swatch" style="background: #e2844a"></span> Overlapping
       </span>
-      <span class="hint">Drag to select time range &middot; Scroll to pan &middot; Ctrl+scroll to zoom &middot; Double-click to reset</span>
+      <span class="hint">Drag to select time range &middot; Shift+click to set time markers &middot; Scroll to pan &middot; Ctrl+scroll to zoom &middot; Double-click to reset</span>
+      <button v-if="hasMarkers" class="clear-markers-btn" @click="handleClearMarkers">Clear markers</button>
       <button v-if="isZoomed" class="reset-zoom-btn" @click="handleResetZoom">Reset zoom</button>
     </div>
 
@@ -182,6 +192,23 @@ canvas {
 
 .reset-zoom-btn:hover {
   background: var(--primary-hover);
+}
+
+.clear-markers-btn {
+  padding: 4px 12px;
+  background: #10b981;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.clear-markers-btn:hover {
+  background: #059669;
 }
 
 .tooltip {

@@ -221,8 +221,11 @@ export function createVisualization(canvas: HTMLCanvasElement, files: AliveFile[
   let selEnd: number | null = null
   let isDragging = false
   let zoomOverviewBounds: { x: number; y: number; w: number; h: number } | null = null
+  let timeMarkerA: number | null = null
+  let timeMarkerB: number | null = null
   let onHoverCallback: ((file: AliveFile | null, pos: { x: number; y: number }) => void) | null = null
   let onZoomChange: ((start: number, end: number, reset: () => void, isZoomed: boolean) => void) | null = null
+  let onMarkersChange: ((a: number | null, b: number | null) => void) | null = null
 
   function getDrawableW() { return canvas.width / dpr - MARGIN_LEFT - MARGIN_RIGHT }
   function getDrawableH() { return canvas.height / dpr - MARGIN_TOP - MARGIN_BOTTOM }
@@ -410,6 +413,60 @@ export function createVisualization(canvas: HTMLCanvasElement, files: AliveFile[
       ctx.fillText(formatTimestamp(Math.max(selStart, selEnd)), ex, MARGIN_TOP - 4)
     }
 
+    // ── Time window markers ──
+    if (timeMarkerA !== null && timeMarkerB !== null) {
+      const ma = timeToX(timeMarkerA)
+      const mb = timeToX(timeMarkerB)
+      const left = Math.min(ma, mb)
+      const right = Math.max(ma, mb)
+
+      // Highlighted region
+      ctx.fillStyle = 'rgba(16, 185, 129, 0.08)'
+      ctx.fillRect(left, MARGIN_TOP, right - left, dh)
+
+      // Vertical lines
+      ctx.strokeStyle = '#10b981'
+      ctx.lineWidth = 1.5
+      ctx.setLineDash([6, 3])
+      ctx.beginPath()
+      ctx.moveTo(ma, MARGIN_TOP)
+      ctx.lineTo(ma, MARGIN_TOP + dh)
+      ctx.moveTo(mb, MARGIN_TOP)
+      ctx.lineTo(mb, MARGIN_TOP + dh)
+      ctx.stroke()
+      ctx.setLineDash([])
+
+      // Timestamp labels
+      ctx.fillStyle = '#10b981'
+      ctx.font = '10px "JetBrains Mono", monospace'
+      ctx.textBaseline = 'bottom'
+      ctx.textAlign = 'center'
+      ctx.fillText(formatTimestamp(timeMarkerA), ma, MARGIN_TOP - 4)
+      ctx.fillText(formatTimestamp(timeMarkerB), mb, MARGIN_TOP - 4)
+
+      // Duration label centered between markers
+      const dur = Math.abs(timeMarkerB - timeMarkerA)
+      ctx.fillStyle = 'rgba(16, 185, 129, 0.8)'
+      ctx.font = '10px Inter, system-ui, sans-serif'
+      ctx.textBaseline = 'top'
+      ctx.fillText(formatDuration(dur), (left + right) / 2, MARGIN_TOP + 4)
+    } else if (timeMarkerA !== null) {
+      const ma = timeToX(timeMarkerA)
+      ctx.strokeStyle = '#10b981'
+      ctx.lineWidth = 1.5
+      ctx.setLineDash([6, 3])
+      ctx.beginPath()
+      ctx.moveTo(ma, MARGIN_TOP)
+      ctx.lineTo(ma, MARGIN_TOP + dh)
+      ctx.stroke()
+      ctx.setLineDash([])
+      ctx.fillStyle = '#10b981'
+      ctx.font = '10px "JetBrains Mono", monospace'
+      ctx.textAlign = 'center'
+      ctx.textBaseline = 'bottom'
+      ctx.fillText(formatTimestamp(timeMarkerA), ma, MARGIN_TOP - 4)
+    }
+
     // ── Axis labels ──
     ctx.fillStyle = '#8888aa'
     ctx.font = 'bold 12px Inter, system-ui, sans-serif'
@@ -581,6 +638,20 @@ export function createVisualization(canvas: HTMLCanvasElement, files: AliveFile[
     if (mx < MARGIN_LEFT || mx > MARGIN_LEFT + getDrawableW()) return
     if (my < MARGIN_TOP || my > MARGIN_TOP + getDrawableH()) return
 
+    // Shift+click sets time window markers
+    if (e.shiftKey) {
+      const t = xToTime(mx)
+      if (timeMarkerA === null || timeMarkerB !== null) {
+        timeMarkerA = t
+        timeMarkerB = null
+      } else {
+        timeMarkerB = t
+      }
+      render()
+      if (onMarkersChange) onMarkersChange(timeMarkerA, timeMarkerB)
+      return
+    }
+
     selStart = xToTime(mx)
     selEnd = selStart
     isDragging = true
@@ -661,6 +732,13 @@ export function createVisualization(canvas: HTMLCanvasElement, files: AliveFile[
     notifyZoom()
   }
 
+  function clearMarkers() {
+    timeMarkerA = null
+    timeMarkerB = null
+    render()
+    if (onMarkersChange) onMarkersChange(null, null)
+  }
+
   function onMouseLeave() {
     hoveredFile = null
     if (isDragging) { isDragging = false; selStart = null; selEnd = null }
@@ -697,6 +775,10 @@ export function createVisualization(canvas: HTMLCanvasElement, files: AliveFile[
     },
     onZoom(cb: (start: number, end: number, reset: () => void, isZoomed: boolean) => void) {
       onZoomChange = cb
+    },
+    clearMarkers,
+    onMarkersChange(cb: (a: number | null, b: number | null) => void) {
+      onMarkersChange = cb
     },
   }
 }
