@@ -74,6 +74,21 @@ function buildOverlapSet(files: AliveFile[]): Set<string> {
   return ids
 }
 
+function findOverlapping(target: AliveFile, files: AliveFile[]): Set<string> {
+  const ids = new Set<string>()
+  if (!target.timeRange) return ids
+  const [tS, tE] = target.timeRange
+  const tP = tS === tE
+  for (const f of files) {
+    if (f === target || !f.timeRange) continue
+    const [fS, fE] = f.timeRange
+    const fP = fS === fE
+    const ov = (tP || fP) ? tS <= fE && fS <= tE : tS < fE && fS < tE
+    if (ov) ids.add(f.fileId)
+  }
+  return ids
+}
+
 function buildLayout(files: AliveFile[]): LayoutResult {
   const sorted = files
     .filter(f => f.timeRange && f.sizeBytes != null && f.sizeBytes > 0)
@@ -269,6 +284,8 @@ export function createVisualization(canvas: HTMLCanvasElement, files: AliveFile[
     ctx.rect(MARGIN_LEFT, MARGIN_TOP, dw, dh)
     ctx.clip()
 
+    const hoverOvIds = hoveredFile ? findOverlapping(hoveredFile, layout.allFiles) : null
+
     for (const p of layout.placed) {
       const bx = timeToX(p.x)
       const bw = Math.max(BAR_MIN_WIDTH_PX, (p.width / timeSpan()) * dw)
@@ -280,21 +297,42 @@ export function createVisualization(canvas: HTMLCanvasElement, files: AliveFile[
 
       const isOv = overlapSet.has(p.file.fileId)
       const isHov = p.file === hoveredFile
-      const color = isOv ? (isHov ? COLOR_OVERLAP : COLOR_OVERLAP_DIM)
-        : (isHov ? getBaseColor(p.file) : getDimColor(p.file))
+      const isHoverOv = hoverOvIds?.has(p.file.fileId) ?? false
+      let color: string
+      if (isHov) {
+        color = isOv ? COLOR_OVERLAP : getBaseColor(p.file)
+      } else if (isHoverOv) {
+        color = '#c084fc' // purple highlight for overlapping files
+      } else if (hoverOvIds) {
+        color = getDimColor(p.file) // dim non-overlapping when hovering
+      } else if (isOv) {
+        color = COLOR_OVERLAP_DIM
+      } else {
+        color = getDimColor(p.file)
+      }
 
       // Bar body
       ctx.fillStyle = color
       drawRoundedRect(ctx, bx, by, bw, bh, BAR_RADIUS)
       ctx.fill()
 
-      // Hover glow
+      // Hover glow on hovered file
       if (isHov) {
         ctx.save()
         ctx.shadowColor = COLOR_HOVER_GLOW
         ctx.shadowBlur = 12
         ctx.strokeStyle = 'rgba(245, 158, 11, 0.8)'
         ctx.lineWidth = 2
+        drawRoundedRect(ctx, bx, by, bw, bh, BAR_RADIUS)
+        ctx.stroke()
+        ctx.restore()
+      }
+
+      // Highlight border on overlapping files
+      if (isHoverOv && !isHov) {
+        ctx.save()
+        ctx.strokeStyle = '#c084fc'
+        ctx.lineWidth = 1.5
         drawRoundedRect(ctx, bx, by, bw, bh, BAR_RADIUS)
         ctx.stroke()
         ctx.restore()
