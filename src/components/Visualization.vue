@@ -11,14 +11,27 @@ export default defineComponent({
       required: true,
     },
   },
-  setup(props) {
+  emits: ['file-selected'],
+  setup(props, { emit }) {
     const canvasRef = ref<HTMLCanvasElement | null>(null)
     const tooltipFile = ref<AliveFile | null>(null)
     const tooltipPos = ref({ x: 0, y: 0 })
     const isZoomed = ref(false)
     const hasMarkers = ref(false)
     const gridInput = ref('auto')
+    const currentTickMs = ref(0)
     let viz: ReturnType<typeof createVisualization> | null = null
+
+    function formatTickMs(ms: number): string {
+      if (ms < 1000) return `${ms}ms`
+      if (ms < 60000) return `${(ms / 1000)}s`
+      if (ms < 3600000) return `${ms / 60000}m`
+      if (ms < 86400000) return `${ms / 3600000}h`
+      if (ms < 604800000) return `${ms / 86400000}d`
+      if (ms < 2592000000) return `${ms / 604800000}w`
+      if (ms < 31536000000) return `${ms / 2592000000}mo`
+      return `${ms / 31536000000}y`
+    }
 
     function parseGridInterval(input: string): number | null {
       const s = input.trim().toLowerCase()
@@ -57,6 +70,12 @@ export default defineComponent({
         viz.onMarkersChange((a, b) => {
           hasMarkers.value = a !== null
         })
+        viz.onTickIntervalChange((ms) => {
+          currentTickMs.value = ms
+        })
+        viz.onClickFile((file) => {
+          emit('file-selected', file)
+        })
       }
     }
 
@@ -88,7 +107,7 @@ export default defineComponent({
       }
     }
 
-    return { canvasRef, tooltipFile, tooltipPos, isZoomed, hasMarkers, gridInput, handleResetZoom, handleClearMarkers, handleGridChange, formatBytes, formatDuration, formatSource }
+    return { canvasRef, tooltipFile, tooltipPos, isZoomed, hasMarkers, gridInput, currentTickMs, formatTickMs, handleResetZoom, handleClearMarkers, handleGridChange, formatBytes, formatDuration, formatSource }
   }
 })
 </script>
@@ -122,6 +141,9 @@ export default defineComponent({
           @change="handleGridChange"
           @keydown.enter="handleGridChange"
         />
+        <span v-if="gridInput.trim().toLowerCase() === 'auto' || gridInput.trim() === ''" class="grid-auto-value">
+          ({{ formatTickMs(currentTickMs) }})
+        </span>
       </span>
       <span class="hint">Drag to select time range &middot; Shift+click to set time markers &middot; Scroll to pan &middot; Ctrl+scroll to zoom &middot; Double-click to reset</span>
       <button v-if="hasMarkers" class="clear-markers-btn" @click="handleClearMarkers">Clear markers</button>
@@ -232,6 +254,12 @@ canvas {
 .grid-input:focus {
   border-color: var(--primary);
   width: 64px;
+}
+
+.grid-auto-value {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
 }
 
 .hint {

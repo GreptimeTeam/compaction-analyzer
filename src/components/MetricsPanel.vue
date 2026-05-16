@@ -1,6 +1,6 @@
 <script lang="ts">
-import { defineComponent, type PropType } from 'vue'
-import { formatBytes } from '../visualization'
+import { defineComponent, ref, type PropType } from 'vue'
+import { formatBytes, formatDuration } from '../visualization'
 import type { AnalysisResult } from '../parser'
 import type { AliveFile } from '../types'
 
@@ -15,8 +15,15 @@ export default defineComponent({
       type: Object as PropType<AnalysisResult | null>,
       default: null,
     },
+    selectedFile: {
+      type: Object as PropType<AliveFile | null>,
+      default: null,
+    },
   },
-  setup() {
+  emits: ['update:selectedFile'],
+  setup(props, { emit }) {
+    const copied = ref(false)
+
     function formatNum(n: number): string {
       return n.toLocaleString()
     }
@@ -38,7 +45,33 @@ export default defineComponent({
       return Math.max(1, ...distribution.map(d => d.count))
     }
 
-    return { formatBytes, formatNum, formatRatio, sourceLabel, maxBarCount }
+    function handleCopyFileId() {
+      if (!props.selectedFile) return
+      const text = props.selectedFile.fileId
+      if (navigator.clipboard) {
+        navigator.clipboard.writeText(text).then(() => {
+          copied.value = true
+          setTimeout(() => { copied.value = false }, 2000)
+        })
+      } else {
+        const ta = document.createElement('textarea')
+        ta.value = text
+        ta.style.position = 'fixed'
+        ta.style.opacity = '0'
+        document.body.appendChild(ta)
+        ta.select()
+        document.execCommand('copy')
+        document.body.removeChild(ta)
+        copied.value = true
+        setTimeout(() => { copied.value = false }, 2000)
+      }
+    }
+
+    function clearSelected() {
+      emit('update:selectedFile', null)
+    }
+
+    return { formatBytes, formatDuration, formatNum, formatRatio, sourceLabel, maxBarCount, copied, handleCopyFileId, clearSelected }
   }
 })
 </script>
@@ -111,6 +144,45 @@ export default defineComponent({
           </span>
           <span class="size-count">{{ bucket.count }}</span>
         </div>
+      </div>
+    </div>
+
+    <div v-if="selectedFile" class="section file-detail">
+      <div class="file-detail-header">
+        <h4 class="section-title">Selected File</h4>
+        <button class="detail-close" @click="clearSelected">&times;</button>
+      </div>
+      <div class="file-id-row">
+        <span class="file-id-text">{{ selectedFile.fileId }}</span>
+        <button class="copy-btn" @click="handleCopyFileId">{{ copied ? 'Copied!' : 'Copy' }}</button>
+      </div>
+      <div class="detail-row">
+        <span class="detail-label">Size</span>
+        <span class="detail-value">{{ selectedFile.sizeBytes != null ? formatBytes(selectedFile.sizeBytes) : 'N/A' }}</span>
+      </div>
+      <div class="detail-row">
+        <span class="detail-label">Source</span>
+        <span class="detail-value">{{ sourceLabel(selectedFile.source) }}</span>
+      </div>
+      <div class="detail-row">
+        <span class="detail-label">Region</span>
+        <span class="detail-value">{{ selectedFile.regionId }}</span>
+      </div>
+      <div class="detail-row">
+        <span class="detail-label">Table</span>
+        <span class="detail-value">{{ selectedFile.tableId }}</span>
+      </div>
+      <div v-if="selectedFile.timeRange" class="detail-row">
+        <span class="detail-label">Start</span>
+        <span class="detail-value detail-mono">{{ new Date(selectedFile.timeRange[0]).toISOString().slice(0, 19) }}Z</span>
+      </div>
+      <div v-if="selectedFile.timeRange" class="detail-row">
+        <span class="detail-label">End</span>
+        <span class="detail-value detail-mono">{{ new Date(selectedFile.timeRange[1]).toISOString().slice(0, 19) }}Z</span>
+      </div>
+      <div v-if="selectedFile.timeRange" class="detail-row">
+        <span class="detail-label">Duration</span>
+        <span class="detail-value">{{ formatDuration(selectedFile.timeRange[1] - selectedFile.timeRange[0]) }}</span>
       </div>
     </div>
   </div>
@@ -220,5 +292,94 @@ export default defineComponent({
   color: var(--text);
   font-family: var(--font-mono);
   font-size: 12px;
+}
+
+.file-detail {
+  border-top: 1px solid var(--border);
+  padding-top: 16px;
+  margin-top: 4px;
+}
+
+.file-detail-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 10px;
+}
+
+.file-detail-header .section-title {
+  margin-bottom: 0;
+}
+
+.detail-close {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 18px;
+  cursor: pointer;
+  padding: 0 4px;
+  line-height: 1;
+}
+
+.detail-close:hover {
+  color: var(--text);
+}
+
+.file-id-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.file-id-text {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text);
+  word-break: break-all;
+  flex: 1;
+  min-width: 0;
+}
+
+.copy-btn {
+  flex-shrink: 0;
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--text-secondary);
+  font-size: 11px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.copy-btn:hover {
+  border-color: var(--primary);
+  color: var(--primary);
+}
+
+.detail-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  padding: 4px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+}
+
+.detail-label {
+  font-size: 11px;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.detail-value {
+  font-size: 12px;
+  color: var(--text-secondary);
+  text-align: right;
+}
+
+.detail-mono {
+  font-family: var(--font-mono);
+  font-size: 11px;
 }
 </style>

@@ -220,6 +220,8 @@ export function createVisualization(canvas: HTMLCanvasElement, files: AliveFile[
   let selStart: number | null = null
   let selEnd: number | null = null
   let isDragging = false
+  let mouseDownX = 0
+  let mouseDownY = 0
   let zoomOverviewBounds: { x: number; y: number; w: number; h: number } | null = null
   let timeMarkerA: number | null = null
   let timeMarkerB: number | null = null
@@ -227,6 +229,8 @@ export function createVisualization(canvas: HTMLCanvasElement, files: AliveFile[
   let onHoverCallback: ((file: AliveFile | null, pos: { x: number; y: number }) => void) | null = null
   let onZoomChange: ((start: number, end: number, reset: () => void, isZoomed: boolean) => void) | null = null
   let onMarkersChange: ((a: number | null, b: number | null) => void) | null = null
+  let onTickIntervalChange: ((ms: number) => void) | null = null
+  let onClickFile: ((file: AliveFile | null) => void) | null = null
 
   function getDrawableW() { return canvas.width / dpr - MARGIN_LEFT - MARGIN_RIGHT }
   function getDrawableH() { return canvas.height / dpr - MARGIN_TOP - MARGIN_BOTTOM }
@@ -286,6 +290,7 @@ export function createVisualization(canvas: HTMLCanvasElement, files: AliveFile[
     // ── X-axis ticks (drawn before bars so bars cover them) ──
     const span = timeSpan()
     const interval = manualTickInterval ?? adaptiveTickInterval(span, dw)
+    if (onTickIntervalChange) onTickIntervalChange(interval)
     const firstTick = Math.ceil(viewStart / interval) * interval
 
     ctx.save()
@@ -639,6 +644,9 @@ export function createVisualization(canvas: HTMLCanvasElement, files: AliveFile[
     if (mx < MARGIN_LEFT || mx > MARGIN_LEFT + getDrawableW()) return
     if (my < MARGIN_TOP || my > MARGIN_TOP + getDrawableH()) return
 
+    mouseDownX = e.clientX
+    mouseDownY = e.clientY
+
     // Shift+click sets time window markers
     if (e.shiftKey) {
       const t = xToTime(mx)
@@ -704,6 +712,14 @@ export function createVisualization(canvas: HTMLCanvasElement, files: AliveFile[
     if (!isDragging) return
     isDragging = false
     canvas.style.cursor = 'default'
+
+    // Detect click (minimal movement) on a file
+    const dx = e.clientX - mouseDownX
+    const dy = e.clientY - mouseDownY
+    if (Math.abs(dx) < 4 && Math.abs(dy) < 4) {
+      const clicked = hitTest(e.clientX, e.clientY)
+      if (onClickFile) onClickFile(clicked)
+    }
 
     if (selStart !== null && selEnd !== null) {
       const s = Math.min(selStart, selEnd)
@@ -786,6 +802,12 @@ export function createVisualization(canvas: HTMLCanvasElement, files: AliveFile[
     setTickInterval,
     onMarkersChange(cb: (a: number | null, b: number | null) => void) {
       onMarkersChange = cb
+    },
+    onTickIntervalChange(cb: (ms: number) => void) {
+      onTickIntervalChange = cb
+    },
+    onClickFile(cb: (file: AliveFile | null) => void) {
+      onClickFile = cb
     },
   }
 }

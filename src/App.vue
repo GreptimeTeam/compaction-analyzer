@@ -15,6 +15,7 @@ export default defineComponent({
     const regionFilter = ref('')
     const tableFilter = ref('')
     const analysisResult = shallowRef<AnalysisResult | null>(null)
+    const selectedFile = shallowRef<AliveFile | null>(null)
     const vizKey = ref(0)
 
     const regionIds = computed(() => {
@@ -66,6 +67,10 @@ export default defineComponent({
       applyFilters()
     }
 
+    function handleFileSelected(file: AliveFile | null) {
+      selectedFile.value = file
+    }
+
     return {
       filteredFiles,
       regionFilter,
@@ -73,10 +78,12 @@ export default defineComponent({
       regionIds,
       tableIds,
       analysisResult,
+      selectedFile,
       vizKey,
       handleFilesLoaded,
       handleRegionChange,
       handleTableChange,
+      handleFileSelected,
     }
   }
 })
@@ -132,10 +139,10 @@ export default defineComponent({
 
         <div class="content">
           <div class="viz-container">
-            <Visualization :files="filteredFiles" :key="vizKey" />
+            <Visualization :files="filteredFiles" :key="vizKey" @file-selected="handleFileSelected" />
           </div>
           <div class="metrics-container">
-            <MetricsPanel :files="filteredFiles" :analysis="analysisResult" />
+            <MetricsPanel :files="filteredFiles" :analysis="analysisResult" :selected-file="selectedFile" />
           </div>
         </div>
       </div>
