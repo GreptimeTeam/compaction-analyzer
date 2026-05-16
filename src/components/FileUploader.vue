@@ -1,6 +1,6 @@
 <script lang="ts">
 import { defineComponent, ref } from 'vue'
-import { parseAliveFileListCsv, parseLogCsv, type InputMode } from '../parser'
+import { parseAliveFileList, parseLogCsv, type InputMode } from '../parser'
 
 export default defineComponent({
   name: 'FileUploader',
@@ -16,7 +16,7 @@ export default defineComponent({
     let fileContent: string | null = null
 
     const inputModes = [
-      { value: 'alive-file-list' as const, label: 'Alive file list', desc: 'Export from GreptimeDB: region_id, file_id, file_size, min_ts, max_ts, visible...' },
+      { value: 'alive-file-list' as const, label: 'Alive file list', desc: 'CSV export or MySQL table output from GreptimeDB (auto-detected)' },
       { value: 'compaction-log' as const, label: 'Compaction log', desc: 'Raw log lines from mito2::compaction::task and mito2::flush' },
     ]
 
@@ -56,7 +56,7 @@ export default defineComponent({
       try {
         let result
         if (inputMode.value === 'alive-file-list') {
-          result = parseAliveFileListCsv(content)
+          result = parseAliveFileList(content)
         } else {
           result = parseLogCsv(content)
         }

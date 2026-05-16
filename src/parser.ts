@@ -21,6 +21,16 @@ export interface AnalysisResult {
   sizeDistribution: Array<{ label: string; count: number }>
 }
 
+// ── Format detection ──
+
+export function isMysqlFormat(input: string): boolean {
+  return input.trimStart().startsWith('+--')
+}
+
+export function parseAliveFileList(input: string): ParseResult {
+  return isMysqlFormat(input) ? parseAliveFileListMysql(input) : parseAliveFileListCsv(input)
+}
+
 // ── Alive file list CSV parser ──
 
 export function parseAliveFileListCsv(csv: string): ParseResult {
@@ -64,6 +74,95 @@ export function parseAliveFileListCsv(csv: string): ParseResult {
 
   aliveFiles.sort((a, b) => a.fileId.localeCompare(b.fileId))
   return { aliveFiles }
+}
+
+// ── MySQL table output parser ──
+
+function parseAliveFileListMysql(text: string): ParseResult {
+  const lines = text.split('\n')
+  // Find header row (first | line that is not a +-- border)
+  let headerIdx = -1
+  for (let i = 0; i < lines.length; i++) {
+    const trimmed = lines[i].trim()
+    if (trimmed.startsWith('|') && !trimmed.startsWith('+')) {
+      headerIdx = i
+      break
+    }
+  }
+  if (headerIdx < 0) throw new Error('Could not find MySQL table header row')
+
+  const headers = parseMysqlRow(lines[headerIdx])
+  const colIndex: Record<string, number> = {}
+  headers.forEach((name, i) => { colIndex[name.trim().toLowerCase()] = i })
+
+  const requiredCols = ['file_id', 'region_id', 'table_id', 'file_size', 'min_ts', 'max_ts', 'visible']
+  for (const col of requiredCols) {
+    if (!(col in colIndex)) throw new Error(`Missing required MySQL column: ${col}`)
+  }
+
+  const aliveFiles: AliveFile[] = []
+  for (let i = headerIdx + 1; i < lines.length; i++) {
+    const trimmed = lines[i].trim()
+    if (!trimmed.startsWith('|') || trimmed.startsWith('+')) continue
+
+    const fields = parseMysqlRow(lines[i])
+    if (fields.length < headers.length) continue
+
+    const visible = getMysqlField(fields, colIndex, 'visible').trim()
+    if (visible !== '1') continue
+
+    const fileId = getMysqlField(fields, colIndex, 'file_id').trim()
+    // Skip metadata rows (no UUID)
+    if (!/^[0-9a-f]{8}-/.test(fileId)) continue
+
+    const regionId = parseMysqlNum(getMysqlField(fields, colIndex, 'region_id'))
+    const tableId = parseMysqlNum(getMysqlField(fields, colIndex, 'table_id'))
+    const sizeBytes = parseMysqlNum(getMysqlField(fields, colIndex, 'file_size'))
+    const minTs = parseDatetime(getMysqlField(fields, colIndex, 'min_ts'))
+    const maxTs = parseDatetime(getMysqlField(fields, colIndex, 'max_ts'))
+
+    if (minTs === null || maxTs === null) continue
+
+    aliveFiles.push({
+      fileId,
+      regionId,
+      tableId,
+      createdAt: minTs,
+      source: 'list-file',
+      sizeBytes,
+      timeRange: [minTs, maxTs],
+    })
+  }
+
+  aliveFiles.sort((a, b) => a.fileId.localeCompare(b.fileId))
+  return { aliveFiles }
+}
+
+function parseMysqlRow(line: string): string[] {
+  // Split by | and strip, ignoring the leading and trailing empty segments
+  const parts = line.split('|')
+  // Remove first and last empty segments from leading/trailing |
+  return parts.slice(1, -1).map(s => s.trim())
+}
+
+function getMysqlField(fields: string[], colIndex: Record<string, number>, name: string): string {
+  const idx = colIndex[name]
+  if (idx === undefined || idx >= fields.length) return ''
+  return fields[idx]
+}
+
+function parseMysqlNum(value: string): number {
+  const v = parseFloat(value.trim())
+  return isNaN(v) ? 0 : v
+}
+
+function parseDatetime(value: string): number | null {
+  const trimmed = value.trim()
+  if (!trimmed || trimmed === 'NULL') return null
+  // Format: "2026-05-04 00:00:00.006000" or "1970-01-01 00:00:00"
+  const normalized = trimmed.replace(' ', 'T') + 'Z'
+  const ms = new Date(normalized).getTime()
+  return isNaN(ms) ? null : ms
 }
 
 // ── Compaction log parser ──
