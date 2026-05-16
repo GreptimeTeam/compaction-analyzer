@@ -283,6 +283,35 @@ export function createVisualization(canvas: HTMLCanvasElement, files: AliveFile[
       ctx.fillRect(MARGIN_LEFT, Math.max(MARGIN_TOP, ty), dw, Math.min(th, MARGIN_TOP + dh - Math.max(MARGIN_TOP, ty)))
     }
 
+    // ── X-axis ticks (drawn before bars so bars cover them) ──
+    const span = timeSpan()
+    const interval = manualTickInterval ?? adaptiveTickInterval(span, dw)
+    const firstTick = Math.ceil(viewStart / interval) * interval
+
+    ctx.save()
+    ctx.beginPath()
+    ctx.rect(MARGIN_LEFT, MARGIN_TOP, dw, h - MARGIN_TOP)
+    ctx.clip()
+
+    for (let t = firstTick; t <= viewEnd; t += interval) {
+      const x = timeToX(t)
+      if (x < MARGIN_LEFT || x > MARGIN_LEFT + dw) continue
+
+      ctx.strokeStyle = '#2a2a4a'
+      ctx.lineWidth = 1
+      ctx.beginPath()
+      ctx.moveTo(x, MARGIN_TOP)
+      ctx.lineTo(x, MARGIN_TOP + dh)
+      ctx.stroke()
+
+      ctx.fillStyle = '#6666aa'
+      ctx.font = '10px "JetBrains Mono", monospace'
+      ctx.textAlign = 'center'
+      ctx.textBaseline = 'top'
+      ctx.fillText(formatTimeLabel(t, interval), x, MARGIN_TOP + dh + 8)
+    }
+    ctx.restore()
+
     // ── Bars ──
     ctx.save()
     ctx.beginPath()
@@ -362,35 +391,6 @@ export function createVisualization(canvas: HTMLCanvasElement, files: AliveFile[
       }
     }
 
-    ctx.restore()
-
-    // ── X-axis ticks ──
-    const span = timeSpan()
-    const interval = manualTickInterval ?? adaptiveTickInterval(span, dw)
-    const firstTick = Math.ceil(viewStart / interval) * interval
-
-    ctx.save()
-    ctx.beginPath()
-    ctx.rect(MARGIN_LEFT, MARGIN_TOP, dw, h - MARGIN_TOP)
-    ctx.clip()
-
-    for (let t = firstTick; t <= viewEnd; t += interval) {
-      const x = timeToX(t)
-      if (x < MARGIN_LEFT || x > MARGIN_LEFT + dw) continue
-
-      ctx.strokeStyle = '#2a2a4a'
-      ctx.lineWidth = 1
-      ctx.beginPath()
-      ctx.moveTo(x, MARGIN_TOP)
-      ctx.lineTo(x, MARGIN_TOP + dh)
-      ctx.stroke()
-
-      ctx.fillStyle = '#6666aa'
-      ctx.font = '10px "JetBrains Mono", monospace'
-      ctx.textAlign = 'center'
-      ctx.textBaseline = 'top'
-      ctx.fillText(formatTimeLabel(t, interval), x, MARGIN_TOP + dh + 8)
-    }
     ctx.restore()
 
     // ── Selection overlay ──
