@@ -7,10 +7,12 @@ export default defineComponent({
   emits: ['files-loaded'],
   setup(_props, { emit }) {
     const inputMode = ref<InputMode>('alive-file-list')
+    const inputMethod = ref<'upload' | 'paste'>('upload')
     const dragover = ref(false)
     const error = ref<string | null>(null)
     const fileName = ref<string | null>(null)
     const loading = ref(false)
+    const pastedText = ref('')
     let fileContent: string | null = null
 
     const inputModes = [
@@ -47,29 +49,30 @@ export default defineComponent({
     }
 
     function processFile() {
-      if (!fileContent || !fileName.value) return
+      const content = inputMethod.value === 'paste' ? pastedText.value : fileContent
+      if (!content) return
       loading.value = true
       error.value = null
       try {
         let result
         if (inputMode.value === 'alive-file-list') {
-          result = parseAliveFileListCsv(fileContent)
+          result = parseAliveFileListCsv(content)
         } else {
-          result = parseLogCsv(fileContent)
+          result = parseLogCsv(content)
         }
         if (result.aliveFiles.length === 0) {
-          error.value = 'No alive files found in the file.'
+          error.value = 'No alive files found in the input.'
         } else {
           emit('files-loaded', result)
         }
       } catch (e: any) {
-        error.value = e.message || 'Failed to parse file.'
+        error.value = e.message || 'Failed to parse input.'
       } finally {
         loading.value = false
       }
     }
 
-    return { inputMode, dragover, error, fileName, loading, inputModes, handleDrop, handleFileInput, processFile }
+    return { inputMode, inputMethod, dragover, error, fileName, loading, pastedText, inputModes, handleDrop, handleFileInput, processFile }
   }
 })
 </script>
@@ -92,31 +95,53 @@ export default defineComponent({
       {{ inputModes.find(m => m.value === inputMode)?.desc }}
     </p>
 
-    <div
-      :class="['drop-zone', { dragover }]"
-      @dragover.prevent="dragover = true"
-      @dragleave="dragover = false"
-      @drop.prevent="handleDrop"
-    >
-      <div class="drop-icon">&#128196;</div>
-      <p>Drag &amp; drop your CSV or log file here</p>
-      <p class="drop-subtitle">or</p>
-      <label class="file-btn">
-        Browse files
-        <input type="file" accept=".csv,.log,.txt" @change="handleFileInput" />
-      </label>
+    <div class="input-method-toggle">
+      <button
+        :class="['method-btn', { active: inputMethod === 'upload' }]"
+        @click="inputMethod = 'upload'"
+      >Upload file</button>
+      <button
+        :class="['method-btn', { active: inputMethod === 'paste' }]"
+        @click="inputMethod = 'paste'"
+      >Paste text</button>
     </div>
 
-    <div v-if="fileName" class="file-info">
-      <span class="file-label">Selected:</span>
-      <span class="file-name">{{ fileName }}</span>
+    <div v-if="inputMethod === 'upload'">
+      <div
+        :class="['drop-zone', { dragover }]"
+        @dragover.prevent="dragover = true"
+        @dragleave="dragover = false"
+        @drop.prevent="handleDrop"
+      >
+        <div class="drop-icon">&#128196;</div>
+        <p>Drag &amp; drop your CSV or log file here</p>
+        <p class="drop-subtitle">or</p>
+        <label class="file-btn">
+          Browse files
+          <input type="file" accept=".csv,.log,.txt" @change="handleFileInput" />
+        </label>
+      </div>
+
+      <div v-if="fileName" class="file-info">
+        <span class="file-label">Selected:</span>
+        <span class="file-name">{{ fileName }}</span>
+      </div>
+    </div>
+
+    <div v-else>
+      <textarea
+        v-model="pastedText"
+        class="paste-area"
+        placeholder="Paste raw CSV or log content here..."
+        spellcheck="false"
+      ></textarea>
     </div>
 
     <p v-if="error" class="error-text">{{ error }}</p>
 
     <button
       class="analyze-btn"
-      :disabled="!fileName || loading"
+      :disabled="(inputMethod === 'upload' ? !fileName : !pastedText.trim()) || loading"
       @click="processFile"
     >
       {{ loading ? 'Parsing...' : 'Analyze' }}
@@ -171,7 +196,67 @@ export default defineComponent({
 .mode-desc {
   color: var(--text-secondary);
   font-size: 13px;
-  margin-bottom: 24px;
+  margin-bottom: 16px;
+}
+
+.input-method-toggle {
+  display: flex;
+  gap: 0;
+  border-radius: 6px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  margin-bottom: 16px;
+}
+
+.method-btn {
+  flex: 1;
+  padding: 6px 12px;
+  border: none;
+  background: var(--bg);
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  transition: all 0.2s;
+}
+
+.method-btn:not(:last-child) {
+  border-right: 1px solid var(--border);
+}
+
+.method-btn:hover {
+  background: var(--bg-hover);
+}
+
+.method-btn.active {
+  background: var(--primary);
+  color: white;
+}
+
+.paste-area {
+  width: 100%;
+  min-height: 200px;
+  padding: 12px;
+  border: 2px dashed var(--border);
+  border-radius: 12px;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.5;
+  resize: vertical;
+  outline: none;
+  transition: border-color 0.2s;
+  box-sizing: border-box;
+}
+
+.paste-area:focus {
+  border-color: var(--primary);
+}
+
+.paste-area::placeholder {
+  color: var(--text-muted);
 }
 
 .drop-zone {
