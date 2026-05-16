@@ -17,12 +17,34 @@ export default defineComponent({
     const tooltipPos = ref({ x: 0, y: 0 })
     const isZoomed = ref(false)
     const hasMarkers = ref(false)
+    const gridInput = ref('auto')
     let viz: ReturnType<typeof createVisualization> | null = null
+
+    function parseGridInterval(input: string): number | null {
+      const s = input.trim().toLowerCase()
+      if (!s || s === 'auto') return null
+      const match = s.match(/^(\d+(?:\.\d+)?)\s*(ms|s|m|h|d|w|mo|y)$/)
+      if (!match) return null
+      const n = parseFloat(match[1])
+      const unit = match[2]
+      const multipliers: Record<string, number> = {
+        ms: 1,
+        s: 1000,
+        m: 60_000,
+        h: 3_600_000,
+        d: 86_400_000,
+        w: 604_800_000,
+        mo: 2_592_000_000,  // 30 days
+        y: 31_536_000_000,  // 365 days
+      }
+      return Math.round(n * multipliers[unit])
+    }
 
     function initViz() {
       if (viz) { viz.destroy(); viz = null }
       isZoomed.value = false
       hasMarkers.value = false
+      gridInput.value = 'auto'
       if (canvasRef.value && props.files.length > 0) {
         viz = createVisualization(canvasRef.value, props.files)
         viz.onHover((file, pos) => {
@@ -46,6 +68,13 @@ export default defineComponent({
       if (viz) viz.clearMarkers()
     }
 
+    function handleGridChange() {
+      const ms = parseGridInterval(gridInput.value)
+      if (ms !== null || gridInput.value.trim().toLowerCase() === 'auto' || gridInput.value.trim() === '') {
+        if (viz) viz.setTickInterval(ms)
+      }
+    }
+
     onMounted(initViz)
     watch(() => props.files, initViz, { deep: false })
     onBeforeUnmount(() => { if (viz) viz.destroy() })
@@ -59,7 +88,7 @@ export default defineComponent({
       }
     }
 
-    return { canvasRef, tooltipFile, tooltipPos, isZoomed, hasMarkers, handleResetZoom, handleClearMarkers, formatBytes, formatDuration, formatSource }
+    return { canvasRef, tooltipFile, tooltipPos, isZoomed, hasMarkers, gridInput, handleResetZoom, handleClearMarkers, handleGridChange, formatBytes, formatDuration, formatSource }
   }
 })
 </script>
@@ -82,6 +111,17 @@ export default defineComponent({
       </span>
       <span class="legend-item">
         <span class="legend-swatch" style="background: #e2844a"></span> Overlapping
+      </span>
+      <span class="legend-item">
+        <span class="legend-label">Grid:</span>
+        <input
+          v-model="gridInput"
+          class="grid-input"
+          placeholder="auto"
+          spellcheck="false"
+          @change="handleGridChange"
+          @keydown.enter="handleGridChange"
+        />
       </span>
       <span class="hint">Drag to select time range &middot; Shift+click to set time markers &middot; Scroll to pan &middot; Ctrl+scroll to zoom &middot; Double-click to reset</span>
       <button v-if="hasMarkers" class="clear-markers-btn" @click="handleClearMarkers">Clear markers</button>
@@ -169,6 +209,29 @@ canvas {
   height: 12px;
   border-radius: 2px;
   display: inline-block;
+}
+
+.legend-label {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.grid-input {
+  width: 48px;
+  padding: 2px 6px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  outline: none;
+  text-align: center;
+}
+
+.grid-input:focus {
+  border-color: var(--primary);
+  width: 64px;
 }
 
 .hint {

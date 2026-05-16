@@ -223,6 +223,7 @@ export function createVisualization(canvas: HTMLCanvasElement, files: AliveFile[
   let zoomOverviewBounds: { x: number; y: number; w: number; h: number } | null = null
   let timeMarkerA: number | null = null
   let timeMarkerB: number | null = null
+  let manualTickInterval: number | null = null  // null = auto
   let onHoverCallback: ((file: AliveFile | null, pos: { x: number; y: number }) => void) | null = null
   let onZoomChange: ((start: number, end: number, reset: () => void, isZoomed: boolean) => void) | null = null
   let onMarkersChange: ((a: number | null, b: number | null) => void) | null = null
@@ -365,7 +366,7 @@ export function createVisualization(canvas: HTMLCanvasElement, files: AliveFile[
 
     // ── X-axis ticks ──
     const span = timeSpan()
-    const interval = adaptiveTickInterval(span, dw)
+    const interval = manualTickInterval ?? adaptiveTickInterval(span, dw)
     const firstTick = Math.ceil(viewStart / interval) * interval
 
     ctx.save()
@@ -739,6 +740,11 @@ export function createVisualization(canvas: HTMLCanvasElement, files: AliveFile[
     if (onMarkersChange) onMarkersChange(null, null)
   }
 
+  function setTickInterval(ms: number | null) {
+    manualTickInterval = ms
+    render()
+  }
+
   function onMouseLeave() {
     hoveredFile = null
     if (isDragging) { isDragging = false; selStart = null; selEnd = null }
@@ -777,6 +783,7 @@ export function createVisualization(canvas: HTMLCanvasElement, files: AliveFile[
       onZoomChange = cb
     },
     clearMarkers,
+    setTickInterval,
     onMarkersChange(cb: (a: number | null, b: number | null) => void) {
       onMarkersChange = cb
     },
