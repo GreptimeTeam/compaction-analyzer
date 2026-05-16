@@ -45,18 +45,12 @@ interface PlacedItem {
   track: number
   x: number
   width: number
-  height: number
-}
-
-interface TrackLayout {
-  height: number
-  maxBytes: number
 }
 
 interface LayoutResult {
   placed: PlacedItem[]
-  tracks: TrackLayout[]
-  totalHeight: number
+  numTracks: number
+  globalMaxBytes: number
   minTime: number
   maxTime: number
   allFiles: AliveFile[]
@@ -89,18 +83,17 @@ function buildLayout(files: AliveFile[]): LayoutResult {
     })
 
   if (sorted.length === 0) {
-    return { placed: [], tracks: [], totalHeight: 0, minTime: 0, maxTime: 0, allFiles: files }
+    return { placed: [], numTracks: 0, globalMaxBytes: 0, minTime: 0, maxTime: 0, allFiles: files }
   }
 
   // Greedy first-fit track assignment: only advance to next track on overlap
-  interface TrackEnd { endTime: number; maxBytes: number }
+  interface TrackEnd { endTime: number }
   const trackEnds: TrackEnd[] = []
   const assignments: Array<{ file: AliveFile; track: number }> = []
 
   for (const file of sorted) {
     const [start, end] = file.timeRange!
     const isPoint = start === end
-    const sz = file.sizeBytes!
 
     let assigned = -1
     for (let t = 0; t < trackEnds.length; t++) {
@@ -112,50 +105,43 @@ function buildLayout(files: AliveFile[]): LayoutResult {
 
     if (assigned === -1) {
       assigned = trackEnds.length
-      trackEnds.push({ endTime: 0, maxBytes: 0 })
+      trackEnds.push({ endTime: 0 })
     }
 
     trackEnds[assigned].endTime = isPoint ? end + 1 : end
-    if (sz > trackEnds[assigned].maxBytes) trackEnds[assigned].maxBytes = sz
     assignments.push({ file, track: assigned })
   }
 
-  // Track height: based on largest file in each track
-  const TRACK_BASE = 20
-  const BYTES_TO_HEIGHT = 0.003
-  const MAX_TRACK_HEIGHT = 120
-  const tracks: TrackLayout[] = trackEnds.map(t => ({
-    height: Math.min(MAX_TRACK_HEIGHT, Math.max(TRACK_BASE, t.maxBytes * BYTES_TO_HEIGHT)),
-    maxBytes: t.maxBytes,
-  }))
-
-  let yAccum = 0
-  const trackYOffsets: number[] = []
-  for (const t of tracks) {
-    trackYOffsets.push(yAccum)
-    yAccum += t.height + TRACK_GAP
+  // Sweep-line to find max simultaneously overlapping files
+  // Sort: time ascending, start (+1) before end (-1) at same time
+  // so point intervals at the same timestamp count as overlapping
+  const events: Array<{ t: number; d: number }> = []
+  for (const f of sorted) {
+    const [s, e] = f.timeRange!
+    events.push({ t: s, d: 1 })
+    events.push({ t: e, d: -1 })
   }
+  events.sort((a, b) => a.t - b.t || b.d - a.d)
+  let cur = 0, maxOverlap = 0
+  for (const ev of events) { cur += ev.d; if (cur > maxOverlap) maxOverlap = cur }
+  const numTracks = maxOverlap
 
-  // Place files — bar height proportional to file size within the track
+  // Place files — bar height computed dynamically at render time
   const placed: PlacedItem[] = assignments.map(({ file, track }) => {
     const [start, end] = file.timeRange!
-    const trackH = tracks[track].height
-    const maxB = tracks[track].maxBytes
-    const barH = Math.max(4, (file.sizeBytes! / maxB) * (trackH - 4))
     return {
       file,
       track,
       x: start,
       width: Math.max(1, end - start),
-      height: barH,
     }
   })
 
   const minTime = sorted[0].timeRange![0]
   const maxTime = sorted.reduce((m, f) => Math.max(m, f.timeRange![1]), 0)
-  const totalHeight = yAccum - TRACK_GAP
+  const globalMaxBytes = sorted.reduce((m, f) => Math.max(m, f.sizeBytes ?? 0), 0)
 
-  return { placed, tracks, totalHeight, minTime, maxTime, allFiles: files }
+  return { placed, numTracks, globalMaxBytes, minTime, maxTime, allFiles: files }
 }
 
 function adaptiveTickInterval(visibleSpan: number, drawableW: number): number {
@@ -226,8 +212,9 @@ export function createVisualization(canvas: HTMLCanvasElement, files: AliveFile[
   function getDrawableH() { return canvas.height / dpr - MARGIN_TOP - MARGIN_BOTTOM }
   function timeSpan() { return viewEnd - viewStart }
 
-  // Total height of all tracks (for bottom-up layout)
-  const allTracksHeight = layout.tracks.reduce((s, t) => s + t.height + TRACK_GAP, 0) - TRACK_GAP
+  // Track sizing: equal height, computed dynamically from drawable area
+  function getTrackHeight() { return getDrawableH() / Math.max(1, layout.numTracks) }
+  function getTotalLayoutHeight() { return getDrawableH() }
   function layoutBottom() { return MARGIN_TOP + getDrawableH() }
 
   function timeToX(t: number) {
@@ -237,10 +224,14 @@ export function createVisualization(canvas: HTMLCanvasElement, files: AliveFile[
     return viewStart + ((x - MARGIN_LEFT) / getDrawableW()) * timeSpan()
   }
   // Track 0 at bottom, higher tracks stack upward
-  function trackY(track: number) {
-    let y = allTracksHeight
-    for (let i = 0; i <= track; i++) y -= layout.tracks[i].height + (i > 0 ? TRACK_GAP : 0)
-    return y
+  function trackBaseY(track: number) {
+    return layoutBottom() - (track + 1) * getTrackHeight()
+  }
+  function barHeight(file: AliveFile) {
+    const th = getTrackHeight()
+    const maxB = layout.globalMaxBytes || 1
+    const ratio = Math.max(0.2, file.sizeBytes! / maxB)
+    return Math.max(4, ratio * (th - 4))
   }
 
   function resize() {
@@ -263,9 +254,10 @@ export function createVisualization(canvas: HTMLCanvasElement, files: AliveFile[
     ctx.fillRect(0, 0, w, h)
 
     // ── Track backgrounds ──
-    for (let i = 0; i < layout.tracks.length; i++) {
-      const ty = layoutBottom() - allTracksHeight + trackY(i) - scrollTop
-      const th = layout.tracks[i].height
+    const trackH = getTrackHeight()
+    for (let i = 0; i < layout.numTracks; i++) {
+      const ty = trackBaseY(i) - scrollTop
+      const th = trackH
       if (ty + th < MARGIN_TOP || ty > MARGIN_TOP + dh) continue
       ctx.fillStyle = i % 2 === 0 ? 'rgba(255,255,255,0.015)' : 'rgba(0,0,0,0.05)'
       ctx.fillRect(MARGIN_LEFT, Math.max(MARGIN_TOP, ty), dw, Math.min(th, MARGIN_TOP + dh - Math.max(MARGIN_TOP, ty)))
@@ -280,10 +272,11 @@ export function createVisualization(canvas: HTMLCanvasElement, files: AliveFile[
     for (const p of layout.placed) {
       const bx = timeToX(p.x)
       const bw = Math.max(BAR_MIN_WIDTH_PX, (p.width / timeSpan()) * dw)
-      const by = layoutBottom() - allTracksHeight + trackY(p.track) + layout.tracks[p.track].height - p.height - scrollTop
+      const bh = barHeight(p.file)
+      const by = trackBaseY(p.track) + trackH - bh - scrollTop
 
       if (bx + bw < MARGIN_LEFT || bx > MARGIN_LEFT + dw) continue
-      if (by + p.height < MARGIN_TOP || by > MARGIN_TOP + dh) continue
+      if (by + bh < MARGIN_TOP || by > MARGIN_TOP + dh) continue
 
       const isOv = overlapSet.has(p.file.fileId)
       const isHov = p.file === hoveredFile
@@ -292,7 +285,7 @@ export function createVisualization(canvas: HTMLCanvasElement, files: AliveFile[
 
       // Bar body
       ctx.fillStyle = color
-      drawRoundedRect(ctx, bx, by, bw, p.height, BAR_RADIUS)
+      drawRoundedRect(ctx, bx, by, bw, bh, BAR_RADIUS)
       ctx.fill()
 
       // Hover glow
@@ -302,27 +295,27 @@ export function createVisualization(canvas: HTMLCanvasElement, files: AliveFile[
         ctx.shadowBlur = 12
         ctx.strokeStyle = 'rgba(245, 158, 11, 0.8)'
         ctx.lineWidth = 2
-        drawRoundedRect(ctx, bx, by, bw, p.height, BAR_RADIUS)
+        drawRoundedRect(ctx, bx, by, bw, bh, BAR_RADIUS)
         ctx.stroke()
         ctx.restore()
       }
 
       // Left accent stripe
       ctx.fillStyle = COLOR_ACCENT_STRIPE
-      drawRoundedRect(ctx, bx, by, 3, p.height, BAR_RADIUS)
+      drawRoundedRect(ctx, bx, by, 3, bh, BAR_RADIUS)
       ctx.fill()
 
       // Label
-      if (p.height > 14 && bw > 80) {
+      if (bh > 14 && bw > 80) {
         ctx.fillStyle = '#fff'
         ctx.font = `bold 10px Inter, system-ui, sans-serif`
         ctx.textAlign = 'center'
         ctx.textBaseline = 'middle'
         const lbl = p.file.fileId.length > 12 ? p.file.fileId.slice(0, 8) + '...' : p.file.fileId
-        ctx.fillText(lbl, bx + bw / 2, by + p.height / 2, bw - 12)
+        ctx.fillText(lbl, bx + bw / 2, by + bh / 2, bw - 12)
         ctx.fillStyle = 'rgba(255,255,255,0.6)'
         ctx.font = `9px "JetBrains Mono", monospace`
-        ctx.fillText(formatBytes(p.file.sizeBytes!), bx + bw / 2, by + p.height / 2 + 12, bw - 12)
+        ctx.fillText(formatBytes(p.file.sizeBytes!), bx + bw / 2, by + bh / 2 + 12, bw - 12)
       }
     }
 
@@ -466,11 +459,13 @@ export function createVisualization(canvas: HTMLCanvasElement, files: AliveFile[
     const dh = getDrawableH()
     if (mx < MARGIN_LEFT || mx > MARGIN_LEFT + dw || my < MARGIN_TOP || my > MARGIN_TOP + dh) return null
 
+    const trackH = getTrackHeight()
     for (const p of layout.placed) {
       const bx = timeToX(p.x)
       const bw = Math.max(BAR_MIN_WIDTH_PX, (p.width / timeSpan()) * dw)
-      const by = layoutBottom() - allTracksHeight + trackY(p.track) + layout.tracks[p.track].height - p.height - scrollTop
-      if (mx >= bx && mx <= bx + bw && my >= by && my <= by + p.height) return p.file
+      const bh = barHeight(p.file)
+      const by = trackBaseY(p.track) + trackH - bh - scrollTop
+      if (mx >= bx && mx <= bx + bw && my >= by && my <= by + bh) return p.file
     }
     return null
   }
