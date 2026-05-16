@@ -220,6 +220,7 @@ export function createVisualization(canvas: HTMLCanvasElement, files: AliveFile[
   let selStart: number | null = null
   let selEnd: number | null = null
   let isDragging = false
+  let zoomOverviewBounds: { x: number; y: number; w: number; h: number } | null = null
   let onHoverCallback: ((file: AliveFile | null, pos: { x: number; y: number }) => void) | null = null
   let onZoomChange: ((start: number, end: number, reset: () => void, isZoomed: boolean) => void) | null = null
 
@@ -433,24 +434,40 @@ export function createVisualization(canvas: HTMLCanvasElement, files: AliveFile[
     ctx.lineTo(MARGIN_LEFT + dw, MARGIN_TOP + dh)
     ctx.stroke()
 
-    // ── Zoom indicator ──
+    // ── Zoom overview bar (centered on top) ──
     const isZoomed = Math.abs(viewStart - layout.minTime) > 100 || Math.abs(viewEnd - layout.maxTime) > 100
+    zoomOverviewBounds = null
     if (isZoomed) {
-      const barW = 80
-      const barH = 6
-      const barX = MARGIN_LEFT + dw - barW - 8
-      const barY = MARGIN_TOP + 8
+      const barW = Math.min(260, dw * 0.5)
+      const barH = 10
+      const barX = MARGIN_LEFT + (dw - barW) / 2
+      const barY = MARGIN_TOP - barH - 10
+      const r = 4
+
+      // Track background
       ctx.fillStyle = '#2a2a4a'
-      ctx.fillRect(barX, barY, barW, barH)
+      ctx.beginPath()
+      ctx.roundRect(barX, barY, barW, barH, r)
+      ctx.fill()
+
+      // Visible range
       const rangeStart = (viewStart - layout.minTime) / fullTimeSpan
       const rangeEnd = (viewEnd - layout.minTime) / fullTimeSpan
+      const vx = barX + rangeStart * barW
+      const vw = Math.max(4, (rangeEnd - rangeStart) * barW)
       ctx.fillStyle = '#4a90e2'
-      ctx.fillRect(barX + rangeStart * barW, barY, (rangeEnd - rangeStart) * barW, barH)
-      ctx.fillStyle = '#6666aa'
+      ctx.beginPath()
+      ctx.roundRect(vx, barY, vw, barH, r)
+      ctx.fill()
+
+      // Label
+      ctx.fillStyle = '#8888cc'
       ctx.font = '9px Inter, system-ui, sans-serif'
-      ctx.textAlign = 'right'
-      ctx.textBaseline = 'top'
-      ctx.fillText('zoomed', barX - 4, barY)
+      ctx.textAlign = 'center'
+      ctx.textBaseline = 'bottom'
+      ctx.fillText('zoomed — click to reset', barX + barW / 2, barY - 3)
+
+      zoomOverviewBounds = { x: barX, y: barY, w: barW, h: barH }
     }
   }
 
@@ -584,13 +601,34 @@ export function createVisualization(canvas: HTMLCanvasElement, files: AliveFile[
 
     const found = hitTest(e.clientX, e.clientY)
     hoveredFile = found
-    canvas.style.cursor = found ? 'pointer' : 'default'
+    // Check if hovering over zoom overview bar
+    let overOverview = false
+    if (zoomOverviewBounds) {
+      const rect = canvas.getBoundingClientRect()
+      const mx = e.clientX - rect.left
+      const my = e.clientY - rect.top
+      const b = zoomOverviewBounds
+      overOverview = mx >= b.x && mx <= b.x + b.w && my >= b.y && my <= b.y + b.h
+    }
+    canvas.style.cursor = overOverview ? 'pointer' : found ? 'pointer' : 'default'
     render()
 
     if (onHoverCallback) onHoverCallback(found, { x: e.clientX, y: e.clientY })
   }
 
   function onMouseUp(e: MouseEvent) {
+    // Click on zoom overview bar → reset zoom
+    if (!isDragging && zoomOverviewBounds) {
+      const rect = canvas.getBoundingClientRect()
+      const mx = e.clientX - rect.left
+      const my = e.clientY - rect.top
+      const b = zoomOverviewBounds
+      if (mx >= b.x && mx <= b.x + b.w && my >= b.y && my <= b.y + b.h) {
+        resetZoom()
+        return
+      }
+    }
+
     if (!isDragging) return
     isDragging = false
     canvas.style.cursor = 'default'
