@@ -47,11 +47,20 @@ Output goes to `dist/`.
 
 ### Deploy to Cloudflare Pages
 
+**Cloudflare Pages dashboard settings:**
+
+| Setting | Value |
+|---|---|
+| Build command | `npm run build` |
+| Build output directory | `dist` |
+
+No `wrangler.toml` is needed for Pages — configure the project in the Cloudflare Pages dashboard.
+
+For manual deploys from local:
+
 ```bash
 npm run deploy
 ```
-
-Requires Wrangler authentication. Deploys the `dist/` directory to Cloudflare Pages.
 
 ### CI/CD
 
