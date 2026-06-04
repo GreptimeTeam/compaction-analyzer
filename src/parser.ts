@@ -4,7 +4,7 @@
  */
 import type { AliveFile } from './types'
 
-export type InputMode = 'alive-file-list' | 'compaction-log'
+export type InputMode = 'alive-file-list' | 'compaction-log' | 'compaction-process'
 
 export interface ParseResult {
   aliveFiles: AliveFile[]
@@ -19,6 +19,32 @@ export interface AnalysisResult {
   sizeCv: number
   sourceBreakdown: Record<string, number>
   sizeDistribution: Array<{ label: string; count: number }>
+}
+
+export interface CompactionProcessTask {
+  timestamp: number
+  regionId: number
+  tableId: number
+  inputFileCount: number
+  outputFileCount: number
+  fanOut: number
+  inputBytes: number
+  outputBytes: number
+  pickMillis: number | null
+  mergeMillis: number | null
+}
+
+export interface CompactionProcessAnalysis {
+  totalTasks: number
+  totalInputFiles: number
+  totalOutputFiles: number
+  totalInputBytes: number
+  totalOutputBytes: number
+  averageFanOut: number
+  maxFanOut: number
+  averagePickMillis: number | null
+  averageMergeMillis: number | null
+  tasks: CompactionProcessTask[]
 }
 
 // ── Format detection ──
@@ -186,6 +212,68 @@ export function parseLogCsv(log: string): ParseResult {
   return { aliveFiles }
 }
 
+export function analyzeCompactionProcesses(log: string): CompactionProcessAnalysis {
+  const tasks = log
+    .split('\n')
+    .map(parseCompactionProcessLine)
+    .filter((task): task is CompactionProcessTask => task !== null)
+
+  const totalInputFiles = tasks.reduce((sum, task) => sum + task.inputFileCount, 0)
+  const totalOutputFiles = tasks.reduce((sum, task) => sum + task.outputFileCount, 0)
+  const totalInputBytes = tasks.reduce((sum, task) => sum + task.inputBytes, 0)
+  const totalOutputBytes = tasks.reduce((sum, task) => sum + task.outputBytes, 0)
+
+  return {
+    totalTasks: tasks.length,
+    totalInputFiles,
+    totalOutputFiles,
+    totalInputBytes,
+    totalOutputBytes,
+    averageFanOut: average(tasks.map(task => task.fanOut)),
+    maxFanOut: tasks.reduce((max, task) => Math.max(max, task.fanOut), 0),
+    averagePickMillis: averageNullable(tasks.map(task => task.pickMillis)),
+    averageMergeMillis: averageNullable(tasks.map(task => task.mergeMillis)),
+    tasks,
+  }
+}
+
+function parseCompactionProcessLine(line: string): CompactionProcessTask | null {
+  if (!line.includes('Compacted SST files')) return null
+
+  const timestamp = extractTimestamp(line)
+  if (!timestamp) return null
+
+  const regionMatch = line.match(/region_id:\s*(\d+)\((\d+),\s*\d+\)/)
+  if (!regionMatch) return null
+
+  const inputStart = line.indexOf('input: [')
+  const outputMarker = '], output: ['
+  const outputIdx = line.indexOf(outputMarker)
+  const windowMarker = '], window:'
+  const windowIdx = line.indexOf(windowMarker)
+  if (inputStart < 0 || outputIdx < 0 || windowIdx < 0) return null
+
+  const inputFiles = parseFileStatsSection(line.slice(inputStart + 8, outputIdx))
+  const outputFiles = parseFileStatsSection(line.slice(outputIdx + outputMarker.length, windowIdx))
+  if (!inputFiles || !outputFiles) return null
+
+  const outputFileCount = outputFiles.length
+  const fanOut = outputFileCount > 0 ? inputFiles.length / outputFileCount : 0
+
+  return {
+    timestamp,
+    regionId: parseInt(regionMatch[1]),
+    tableId: parseInt(regionMatch[2]),
+    inputFileCount: inputFiles.length,
+    outputFileCount,
+    fanOut,
+    inputBytes: inputFiles.reduce((sum, file) => sum + file.sizeBytes, 0),
+    outputBytes: outputFiles.reduce((sum, file) => sum + file.sizeBytes, 0),
+    pickMillis: extractDurationMillis(line, ['pick_time', 'pick_elapsed', 'pick duration']),
+    mergeMillis: extractDurationMillis(line, ['merge_time', 'merge_elapsed', 'merge duration', 'compaction_time']),
+  }
+}
+
 interface FileStats {
   fileId: string
   sizeBytes: number
@@ -335,6 +423,32 @@ function parseLogTime(value: string): number | null {
   }
   const ms = new Date(normalized).getTime()
   return isNaN(ms) ? null : ms
+}
+
+function extractDurationMillis(line: string, names: string[]): number | null {
+  for (const name of names) {
+    const escapedName = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    const match = line.match(new RegExp(`${escapedName}\\s*[:=]\\s*([0-9.]+)\\s*(ns|us|µs|ms|s|sec|secs|seconds)?`, 'i'))
+    if (!match) continue
+    const value = parseFloat(match[1])
+    if (isNaN(value)) continue
+    const unit = (match[2] || 'ms').toLowerCase()
+    if (unit === 'ns') return value / 1_000_000
+    if (unit === 'us' || unit === 'µs') return value / 1_000
+    if (unit === 's' || unit === 'sec' || unit === 'secs' || unit === 'seconds') return value * 1000
+    return value
+  }
+  return null
+}
+
+function average(values: number[]): number {
+  if (values.length === 0) return 0
+  return values.reduce((sum, value) => sum + value, 0) / values.length
+}
+
+function averageNullable(values: Array<number | null>): number | null {
+  const present = values.filter((value): value is number => value !== null)
+  return present.length > 0 ? average(present) : null
 }
 
 function parseSize(value: string, unit: string): number | null {

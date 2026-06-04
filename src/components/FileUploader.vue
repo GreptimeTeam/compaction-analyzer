@@ -1,10 +1,10 @@
 <script lang="ts">
 import { defineComponent, ref } from 'vue'
-import { parseAliveFileList, parseLogCsv, type InputMode } from '../parser'
+import { analyzeCompactionProcesses, parseAliveFileList, parseLogCsv, type InputMode } from '../parser'
 
 export default defineComponent({
   name: 'FileUploader',
-  emits: ['files-loaded'],
+  emits: ['files-loaded', 'processes-loaded'],
   setup(_props, { emit }) {
     const inputMode = ref<InputMode>('alive-file-list')
     const inputMethod = ref<'upload' | 'paste'>('upload')
@@ -17,7 +17,8 @@ export default defineComponent({
 
     const inputModes = [
       { value: 'alive-file-list' as const, label: 'Alive file list', desc: 'CSV export or MySQL table output from GreptimeDB (auto-detected)' },
-      { value: 'compaction-log' as const, label: 'Compaction log', desc: 'Raw log lines from mito2::compaction::task and mito2::flush' },
+      { value: 'compaction-log' as const, label: 'File lifecycle log', desc: 'Raw log lines from mito2::compaction::task and mito2::flush, visualized as alive SST files' },
+      { value: 'compaction-process' as const, label: 'Compaction process', desc: 'Raw compaction logs summarized by task, pick time, merge time, and fan-out' },
     ]
 
     function parseFile(content: string, name: string) {
@@ -54,16 +55,27 @@ export default defineComponent({
       loading.value = true
       error.value = null
       try {
-        let result
         if (inputMode.value === 'alive-file-list') {
-          result = parseAliveFileList(content)
+          const result = parseAliveFileList(content)
+          if (result.aliveFiles.length === 0) {
+            error.value = 'No alive files found in the input.'
+          } else {
+            emit('files-loaded', result)
+          }
+        } else if (inputMode.value === 'compaction-log') {
+          const result = parseLogCsv(content)
+          if (result.aliveFiles.length === 0) {
+            error.value = 'No alive files found in the input.'
+          } else {
+            emit('files-loaded', result)
+          }
         } else {
-          result = parseLogCsv(content)
-        }
-        if (result.aliveFiles.length === 0) {
-          error.value = 'No alive files found in the input.'
-        } else {
-          emit('files-loaded', result)
+          const result = analyzeCompactionProcesses(content)
+          if (result.totalTasks === 0) {
+            error.value = 'No compaction process tasks found in the input.'
+          } else {
+            emit('processes-loaded', result)
+          }
         }
       } catch (e: any) {
         error.value = e.message || 'Failed to parse input.'
@@ -86,7 +98,7 @@ export default defineComponent({
         :class="['toggle-btn', { active: inputMode === mode.value }]"
         @click="inputMode = mode.value"
       >
-        <span class="toggle-icon">{{ mode.value === 'alive-file-list' ? '&#9638;' : '&#9654;' }}</span>
+        <span class="toggle-icon">{{ mode.value === 'alive-file-list' ? '&#9638;' : mode.value === 'compaction-log' ? '&#9654;' : '&#8987;' }}</span>
         {{ mode.label }}
       </button>
     </div>
@@ -132,7 +144,7 @@ export default defineComponent({
       <textarea
         v-model="pastedText"
         class="paste-area"
-        placeholder="Paste raw CSV or log content here..."
+        :placeholder="inputMode === 'alive-file-list' ? 'Paste raw CSV or MySQL table output here...' : 'Paste raw compaction log content here...'"
         spellcheck="false"
       ></textarea>
     </div>

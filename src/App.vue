@@ -3,18 +3,20 @@ import { defineComponent, ref, shallowRef, computed, nextTick } from 'vue'
 import FileUploader from './components/FileUploader.vue'
 import Visualization from './components/Visualization.vue'
 import MetricsPanel from './components/MetricsPanel.vue'
-import { analyze, type AnalysisResult } from './parser'
+import CompactionProcessPanel from './components/CompactionProcessPanel.vue'
+import { analyze, type AnalysisResult, type CompactionProcessAnalysis } from './parser'
 import type { AliveFile } from './types'
 
 export default defineComponent({
   name: 'App',
-  components: { FileUploader, Visualization, MetricsPanel },
+  components: { FileUploader, Visualization, MetricsPanel, CompactionProcessPanel },
   setup() {
     const allFiles = ref<Map<string, AliveFile>>(new Map())
     const filteredFiles = shallowRef<AliveFile[]>([])
     const regionFilter = ref('')
     const tableFilter = ref('')
     const analysisResult = shallowRef<AnalysisResult | null>(null)
+    const processAnalysis = shallowRef<CompactionProcessAnalysis | null>(null)
     const selectedFile = shallowRef<AliveFile | null>(null)
     const vizKey = ref(0)
     const searchQuery = ref('')
@@ -54,10 +56,29 @@ export default defineComponent({
         map.set(file.fileId, file)
       }
       allFiles.value = map
+      processAnalysis.value = null
       regionFilter.value = ''
       tableFilter.value = ''
       searchQuery.value = ''
       applyFilters()
+    }
+
+    function handleProcessesLoaded(result: CompactionProcessAnalysis) {
+      filteredFiles.value = []
+      allFiles.value = new Map()
+      analysisResult.value = null
+      selectedFile.value = null
+      searchQuery.value = ''
+      processAnalysis.value = result
+    }
+
+    function resetUpload() {
+      filteredFiles.value = []
+      allFiles.value = new Map()
+      analysisResult.value = null
+      processAnalysis.value = null
+      selectedFile.value = null
+      searchQuery.value = ''
     }
 
     function handleRegionChange(value: string) {
@@ -91,11 +112,14 @@ export default defineComponent({
       regionIds,
       tableIds,
       analysisResult,
+      processAnalysis,
       selectedFile,
       vizKey,
       searchQuery,
       vizRef,
       handleFilesLoaded,
+      handleProcessesLoaded,
+      resetUpload,
       handleRegionChange,
       handleTableChange,
       handleFileSelected,
@@ -121,15 +145,29 @@ export default defineComponent({
     </header>
 
     <main class="main">
-      <div v-if="filteredFiles.length === 0" class="upload-section">
-        <FileUploader @files-loaded="handleFilesLoaded" />
+      <div v-if="filteredFiles.length === 0 && !processAnalysis" class="upload-section">
+        <FileUploader @files-loaded="handleFilesLoaded" @processes-loaded="handleProcessesLoaded" />
+      </div>
+
+      <div v-else-if="processAnalysis" class="analysis-section">
+        <div class="toolbar">
+          <div class="toolbar-left">
+            <button class="back-btn" @click="resetUpload">
+              &larr; Upload new input
+            </button>
+            <div class="file-count">
+              {{ processAnalysis.totalTasks }} compaction tasks
+            </div>
+          </div>
+        </div>
+        <CompactionProcessPanel :analysis="processAnalysis" />
       </div>
 
       <div v-else class="analysis-section">
         <div class="toolbar">
           <div class="toolbar-left">
-            <button class="back-btn" @click="filteredFiles = []; analysisResult = null">
-              &larr; Upload new file
+            <button class="back-btn" @click="resetUpload">
+              &larr; Upload new input
             </button>
             <div class="file-count">
               {{ filteredFiles.length }} alive files
