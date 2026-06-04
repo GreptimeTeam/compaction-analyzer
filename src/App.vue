@@ -4,7 +4,7 @@ import FileUploader from './components/FileUploader.vue'
 import Visualization from './components/Visualization.vue'
 import MetricsPanel from './components/MetricsPanel.vue'
 import CompactionProcessPanel from './components/CompactionProcessPanel.vue'
-import { analyze, type AnalysisResult, type CompactionProcessAnalysis } from './parser'
+import { analyze, analyzeCompactionProcessTasks, type AnalysisResult, type CompactionProcessAnalysis, type CompactionProcessTask } from './parser'
 import type { AliveFile } from './types'
 
 export default defineComponent({
@@ -17,6 +17,7 @@ export default defineComponent({
     const tableFilter = ref('')
     const analysisResult = shallowRef<AnalysisResult | null>(null)
     const processAnalysis = shallowRef<CompactionProcessAnalysis | null>(null)
+    const allProcessTasks = shallowRef<CompactionProcessTask[]>([])
     const selectedFile = shallowRef<AliveFile | null>(null)
     const vizKey = ref(0)
     const searchQuery = ref('')
@@ -38,6 +39,14 @@ export default defineComponent({
       return [...tables].sort()
     })
 
+    const processRegionIds = computed(() => {
+      const regions = new Set<string>()
+      for (const task of allProcessTasks.value) {
+        regions.add(String(task.regionId))
+      }
+      return [...regions].sort()
+    })
+
     function applyFilters() {
       const files: AliveFile[] = []
       for (const [, file] of allFiles.value) {
@@ -50,6 +59,13 @@ export default defineComponent({
       vizKey.value++
     }
 
+    function applyProcessFilters() {
+      const tasks = regionFilter.value
+        ? allProcessTasks.value.filter(task => String(task.regionId) === regionFilter.value)
+        : allProcessTasks.value
+      processAnalysis.value = analyzeCompactionProcessTasks(tasks)
+    }
+
     function handleFilesLoaded(result: { aliveFiles: AliveFile[] }) {
       const map = new Map<string, AliveFile>()
       for (const file of result.aliveFiles) {
@@ -57,6 +73,7 @@ export default defineComponent({
       }
       allFiles.value = map
       processAnalysis.value = null
+      allProcessTasks.value = []
       regionFilter.value = ''
       tableFilter.value = ''
       searchQuery.value = ''
@@ -68,8 +85,11 @@ export default defineComponent({
       allFiles.value = new Map()
       analysisResult.value = null
       selectedFile.value = null
+      regionFilter.value = ''
+      tableFilter.value = ''
       searchQuery.value = ''
-      processAnalysis.value = result
+      allProcessTasks.value = result.tasks
+      applyProcessFilters()
     }
 
     function resetUpload() {
@@ -77,13 +97,20 @@ export default defineComponent({
       allFiles.value = new Map()
       analysisResult.value = null
       processAnalysis.value = null
+      allProcessTasks.value = []
       selectedFile.value = null
+      regionFilter.value = ''
+      tableFilter.value = ''
       searchQuery.value = ''
     }
 
     function handleRegionChange(value: string) {
       regionFilter.value = value
-      applyFilters()
+      if (processAnalysis.value) {
+        applyProcessFilters()
+      } else {
+        applyFilters()
+      }
     }
 
     function handleTableChange(value: string) {
@@ -110,6 +137,7 @@ export default defineComponent({
       regionFilter,
       tableFilter,
       regionIds,
+      processRegionIds,
       tableIds,
       analysisResult,
       processAnalysis,
@@ -157,6 +185,15 @@ export default defineComponent({
             </button>
             <div class="file-count">
               {{ processAnalysis.totalTasks }} compaction tasks
+            </div>
+          </div>
+          <div class="toolbar-filters">
+            <div class="filter-group" v-if="processRegionIds.length > 1">
+              <label>Region:</label>
+              <select :value="regionFilter" @change="handleRegionChange(($event.target as HTMLSelectElement).value)">
+                <option value="">All regions</option>
+                <option v-for="id in processRegionIds" :key="id" :value="id">{{ id }}</option>
+              </select>
             </div>
           </div>
         </div>

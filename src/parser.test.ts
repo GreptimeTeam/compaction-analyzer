@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { analyzeCompactionProcesses } from './parser'
+import { analyzeCompactionProcessTasks, analyzeCompactionProcesses } from './parser'
 
 describe('analyzeCompactionProcesses', () => {
   it('summarizes compaction tasks from raw log text', () => {
@@ -26,5 +26,44 @@ describe('analyzeCompactionProcesses', () => {
       pickMillis: 12,
       mergeMillis: 345,
     })
+  })
+
+  it('summarizes a region-filtered task list', () => {
+    const result = analyzeCompactionProcessTasks([
+      {
+        timestamp: 1,
+        regionId: 100,
+        tableId: 10,
+        inputFileCount: 2,
+        outputFileCount: 1,
+        fanOut: 2,
+        inputBytes: 200,
+        outputBytes: 180,
+        pickMillis: 10,
+        mergeMillis: 100,
+      },
+      {
+        timestamp: 2,
+        regionId: 100,
+        tableId: 10,
+        inputFileCount: 4,
+        outputFileCount: 2,
+        fanOut: 2,
+        inputBytes: 400,
+        outputBytes: 360,
+        pickMillis: null,
+        mergeMillis: 300,
+      },
+    ])
+
+    expect(result.totalTasks).toBe(2)
+    expect(result.totalInputFiles).toBe(6)
+    expect(result.totalOutputFiles).toBe(3)
+    expect(result.totalInputBytes).toBe(600)
+    expect(result.totalOutputBytes).toBe(540)
+    expect(result.averageFanOut).toBe(2)
+    expect(result.maxFanOut).toBe(2)
+    expect(result.averagePickMillis).toBe(10)
+    expect(result.averageMergeMillis).toBe(200)
   })
 })

@@ -218,6 +218,10 @@ export function analyzeCompactionProcesses(log: string): CompactionProcessAnalys
     .map(parseCompactionProcessLine)
     .filter((task): task is CompactionProcessTask => task !== null)
 
+  return analyzeCompactionProcessTasks(tasks)
+}
+
+export function analyzeCompactionProcessTasks(tasks: CompactionProcessTask[]): CompactionProcessAnalysis {
   const totalInputFiles = tasks.reduce((sum, task) => sum + task.inputFileCount, 0)
   const totalOutputFiles = tasks.reduce((sum, task) => sum + task.outputFileCount, 0)
   const totalInputBytes = tasks.reduce((sum, task) => sum + task.inputBytes, 0)
