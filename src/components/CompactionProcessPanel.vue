@@ -1,7 +1,7 @@
 <script lang="ts">
 import { computed, defineComponent, ref, type PropType } from 'vue'
 import { formatBytes, formatDuration } from '../visualization'
-import { sortCompactionProcessTasks, type CompactionProcessAnalysis, type CompactionProcessSortKey, type CompactionProcessTask, type SortDirection } from '../parser'
+import { getMergeTimeSeverity, sortCompactionProcessFiles, sortCompactionProcessTasks, type CompactionProcessAnalysis, type CompactionProcessFile, type CompactionProcessFileSortKey, type CompactionProcessSortKey, type CompactionProcessTask, type SortDirection } from '../parser'
 
 export default defineComponent({
   name: 'CompactionProcessPanel',
@@ -14,6 +14,11 @@ export default defineComponent({
   setup(props) {
     const sortKey = ref<CompactionProcessSortKey>('time')
     const sortDirection = ref<SortDirection>('desc')
+    const inputFileSortKey = ref<CompactionProcessFileSortKey>('time-range')
+    const inputFileSortDirection = ref<SortDirection>('asc')
+    const outputFileSortKey = ref<CompactionProcessFileSortKey>('time-range')
+    const outputFileSortDirection = ref<SortDirection>('asc')
+    const expandedTaskKey = ref<string | null>(null)
 
     const sortedTasks = computed(() => sortCompactionProcessTasks(props.analysis.tasks, sortKey.value, sortDirection.value))
 
@@ -31,6 +36,39 @@ export default defineComponent({
       return sortDirection.value === 'asc' ? '↑' : '↓'
     }
 
+    function setFileSort(kind: 'input' | 'output', key: CompactionProcessFileSortKey) {
+      const currentKey = kind === 'input' ? inputFileSortKey : outputFileSortKey
+      const currentDirection = kind === 'input' ? inputFileSortDirection : outputFileSortDirection
+      if (currentKey.value === key) {
+        currentDirection.value = currentDirection.value === 'asc' ? 'desc' : 'asc'
+      } else {
+        currentKey.value = key
+        currentDirection.value = 'asc'
+      }
+    }
+
+    function fileSortMark(kind: 'input' | 'output', key: CompactionProcessFileSortKey): string {
+      const currentKey = kind === 'input' ? inputFileSortKey : outputFileSortKey
+      const currentDirection = kind === 'input' ? inputFileSortDirection : outputFileSortDirection
+      if (currentKey.value !== key) return ''
+      return currentDirection.value === 'asc' ? '↑' : '↓'
+    }
+
+    function sortedFiles(kind: 'input' | 'output', files: CompactionProcessFile[]): CompactionProcessFile[] {
+      const key = kind === 'input' ? inputFileSortKey.value : outputFileSortKey.value
+      const direction = kind === 'input' ? inputFileSortDirection.value : outputFileSortDirection.value
+      return sortCompactionProcessFiles(files, key, direction)
+    }
+
+    function taskKey(task: CompactionProcessTask): string {
+      return `${task.timestamp}-${task.regionId}-${task.tableId}`
+    }
+
+    function toggleTask(task: CompactionProcessTask) {
+      const key = taskKey(task)
+      expandedTaskKey.value = expandedTaskKey.value === key ? null : key
+    }
+
     function formatNum(n: number): string {
       return n.toLocaleString(undefined, { maximumFractionDigits: 2 })
     }
@@ -39,11 +77,19 @@ export default defineComponent({
       return ms === null ? 'N/A' : formatDuration(ms)
     }
 
+    function mergeTimeClass(task: CompactionProcessTask): string {
+      return `merge-badge ${getMergeTimeSeverity(task, props.analysis.tasks)}`
+    }
+
     function taskTime(task: CompactionProcessTask): string {
       return new Date(task.timestamp).toISOString().slice(0, 19) + 'Z'
     }
 
-    return { formatBytes, formatDuration, formatNum, formatMaybeDuration, setSort, sortedTasks, sortMark, taskTime }
+    function fileTimeRange(file: CompactionProcessFile): string {
+      return `${new Date(file.timeRange[0]).toISOString().slice(0, 19)}Z - ${new Date(file.timeRange[1]).toISOString().slice(0, 19)}Z`
+    }
+
+    return { expandedTaskKey, fileSortMark, fileTimeRange, formatBytes, formatDuration, formatNum, formatMaybeDuration, mergeTimeClass, setFileSort, setSort, sortedFiles, sortedTasks, sortMark, taskKey, taskTime, toggleTask }
   },
 })
 </script>
@@ -110,16 +156,64 @@ export default defineComponent({
           <button class="sort-header" @click="setSort('merge')">Merge time {{ sortMark('merge') }}</button>
           <span>Pick</span>
         </div>
-        <div v-for="task in sortedTasks" :key="task.timestamp + '-' + task.regionId" class="task-row">
-          <span class="mono">{{ taskTime(task) }}</span>
-          <span>{{ task.regionId }} / {{ task.tableId }}</span>
-          <span>{{ formatNum(task.inputFileCount) }}</span>
-          <span>{{ formatBytes(task.inputBytes) }}</span>
-          <span>{{ formatNum(task.outputFileCount) }}</span>
-          <span>{{ formatBytes(task.outputBytes) }}</span>
-          <span>{{ formatMaybeDuration(task.mergeMillis) }}</span>
-          <span>{{ formatMaybeDuration(task.pickMillis) }}</span>
-        </div>
+        <template v-for="task in sortedTasks" :key="taskKey(task)">
+          <button
+            :class="['task-row', 'task-row-button', { expanded: expandedTaskKey === taskKey(task) }]"
+            @click="toggleTask(task)"
+          >
+            <span class="mono">{{ taskTime(task) }}</span>
+            <span>{{ task.regionId }} / {{ task.tableId }}</span>
+            <span>{{ formatNum(task.inputFileCount) }}</span>
+            <span>{{ formatBytes(task.inputBytes) }}</span>
+            <span>{{ formatNum(task.outputFileCount) }}</span>
+            <span>{{ formatBytes(task.outputBytes) }}</span>
+            <span :class="mergeTimeClass(task)">{{ formatMaybeDuration(task.mergeMillis) }}</span>
+            <span>{{ formatMaybeDuration(task.pickMillis) }}</span>
+          </button>
+          <div v-if="expandedTaskKey === taskKey(task)" class="task-detail">
+            <div class="detail-grid">
+              <div><span class="detail-label">Region</span><span>{{ task.regionId }}</span></div>
+              <div><span class="detail-label">Table</span><span>{{ task.tableId }}</span></div>
+              <div><span class="detail-label">Fan-out</span><span>{{ formatNum(task.fanOut) }}</span></div>
+              <div><span class="detail-label">Merge time</span><span :class="mergeTimeClass(task)">{{ formatMaybeDuration(task.mergeMillis) }}</span></div>
+              <div><span class="detail-label">Pick time</span><span>{{ formatMaybeDuration(task.pickMillis) }}</span></div>
+              <div><span class="detail-label">Timestamp</span><span class="mono">{{ taskTime(task) }}</span></div>
+            </div>
+
+            <div class="file-lists">
+              <div class="file-list">
+                <h4>Input Files</h4>
+                <div class="file-row file-row-head">
+                  <button class="sort-header" @click="setFileSort('input', 'file-id')">File ID {{ fileSortMark('input', 'file-id') }}</button>
+                  <button class="sort-header" @click="setFileSort('input', 'level')">Level {{ fileSortMark('input', 'level') }}</button>
+                  <button class="sort-header" @click="setFileSort('input', 'size')">Size {{ fileSortMark('input', 'size') }}</button>
+                  <button class="sort-header" @click="setFileSort('input', 'time-range')">Time range {{ fileSortMark('input', 'time-range') }}</button>
+                </div>
+                <div v-for="file in sortedFiles('input', task.inputFiles)" :key="file.fileId" class="file-row">
+                  <span class="mono file-id">{{ file.fileId }}</span>
+                  <span>{{ file.level }}</span>
+                  <span>{{ formatBytes(file.sizeBytes) }}</span>
+                  <span class="mono">{{ fileTimeRange(file) }}</span>
+                </div>
+              </div>
+              <div class="file-list">
+                <h4>Output Files</h4>
+                <div class="file-row file-row-head">
+                  <button class="sort-header" @click="setFileSort('output', 'file-id')">File ID {{ fileSortMark('output', 'file-id') }}</button>
+                  <button class="sort-header" @click="setFileSort('output', 'level')">Level {{ fileSortMark('output', 'level') }}</button>
+                  <button class="sort-header" @click="setFileSort('output', 'size')">Size {{ fileSortMark('output', 'size') }}</button>
+                  <button class="sort-header" @click="setFileSort('output', 'time-range')">Time range {{ fileSortMark('output', 'time-range') }}</button>
+                </div>
+                <div v-for="file in sortedFiles('output', task.outputFiles)" :key="file.fileId" class="file-row">
+                  <span class="mono file-id">{{ file.fileId }}</span>
+                  <span>{{ file.level }}</span>
+                  <span>{{ formatBytes(file.sizeBytes) }}</span>
+                  <span class="mono">{{ fileTimeRange(file) }}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </template>
       </div>
     </section>
   </div>
@@ -241,6 +335,21 @@ export default defineComponent({
   font-size: 12px;
 }
 
+.task-row-button {
+  width: 100%;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-family: inherit;
+  text-align: left;
+}
+
+.task-row-button:hover,
+.task-row-button.expanded {
+  background: rgba(74, 144, 226, 0.08);
+  color: var(--text);
+}
+
 .task-row.header {
   color: var(--text);
   background: var(--bg);
@@ -265,6 +374,124 @@ export default defineComponent({
   color: var(--primary);
 }
 
+.merge-badge {
+  display: inline-flex;
+  width: max-content;
+  min-width: 54px;
+  justify-content: center;
+  padding: 3px 8px;
+  border-radius: 999px;
+  font-family: var(--font-mono);
+  font-weight: 800;
+}
+
+.merge-badge.red {
+  background: rgba(239, 68, 68, 0.24);
+  color: #fecaca;
+  box-shadow: inset 0 0 0 1px rgba(248, 113, 113, 0.55);
+}
+
+.merge-badge.orange {
+  background: rgba(249, 115, 22, 0.24);
+  color: #fed7aa;
+  box-shadow: inset 0 0 0 1px rgba(251, 146, 60, 0.55);
+}
+
+.merge-badge.yellow {
+  background: rgba(234, 179, 8, 0.22);
+  color: #fef08a;
+  box-shadow: inset 0 0 0 1px rgba(250, 204, 21, 0.5);
+}
+
+.merge-badge.green {
+  background: rgba(34, 197, 94, 0.2);
+  color: #bbf7d0;
+  box-shadow: inset 0 0 0 1px rgba(74, 222, 128, 0.45);
+}
+
+.merge-badge.none {
+  background: rgba(148, 163, 184, 0.12);
+  color: var(--text-muted);
+  box-shadow: inset 0 0 0 1px rgba(148, 163, 184, 0.22);
+}
+
+.task-detail {
+  padding: 18px;
+  border-bottom: 1px solid rgba(42, 42, 74, 0.8);
+  background: rgba(15, 15, 26, 0.65);
+}
+
+.detail-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 18px;
+}
+
+.detail-grid > div {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--text-secondary);
+}
+
+.detail-label {
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.file-lists {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+
+.file-list {
+  overflow-x: auto;
+  border: 1px solid rgba(96, 165, 250, 0.45);
+  border-radius: 10px;
+  background: linear-gradient(180deg, rgba(37, 99, 235, 0.2), rgba(30, 64, 175, 0.14)), var(--bg-surface);
+  box-shadow: inset 0 1px 0 rgba(191, 219, 254, 0.12);
+}
+
+.file-list h4 {
+  padding: 12px;
+  border-bottom: 1px solid rgba(96, 165, 250, 0.35);
+  color: #dbeafe;
+  font-size: 12px;
+}
+
+.file-row {
+  display: grid;
+  grid-template-columns: 260px 56px 90px 260px;
+  gap: 10px;
+  min-width: 700px;
+  padding: 8px 12px;
+  border-bottom: 1px solid rgba(96, 165, 250, 0.18);
+  color: #c7d2fe;
+  font-size: 11px;
+}
+
+.file-row-head {
+  color: #eff6ff;
+  background: rgba(59, 130, 246, 0.22);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.file-id {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .mono {
   font-family: var(--font-mono);
 }
@@ -281,6 +508,9 @@ export default defineComponent({
   }
   .task-table-wrap {
     overflow-x: auto;
+  }
+  .detail-grid, .file-lists {
+    grid-template-columns: 1fr;
   }
 }
 </style>

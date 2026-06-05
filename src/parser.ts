@@ -30,8 +30,17 @@ export interface CompactionProcessTask {
   fanOut: number
   inputBytes: number
   outputBytes: number
+  inputFiles: CompactionProcessFile[]
+  outputFiles: CompactionProcessFile[]
   pickMillis: number | null
   mergeMillis: number | null
+}
+
+export interface CompactionProcessFile {
+  fileId: string
+  level: number
+  sizeBytes: number
+  timeRange: [number, number]
 }
 
 export interface CompactionProcessAnalysis {
@@ -48,6 +57,8 @@ export interface CompactionProcessAnalysis {
 }
 
 export type CompactionProcessSortKey = 'time' | 'merge' | 'input-files' | 'output-files' | 'input-size' | 'output-size'
+export type CompactionProcessFileSortKey = 'file-id' | 'level' | 'size' | 'time-range'
+export type MergeTimeSeverity = 'red' | 'orange' | 'yellow' | 'green' | 'none'
 export type SortDirection = 'asc' | 'desc'
 
 // ── Format detection ──
@@ -257,6 +268,33 @@ export function sortCompactionProcessTasks(
   })
 }
 
+export function sortCompactionProcessFiles(
+  files: CompactionProcessFile[],
+  key: CompactionProcessFileSortKey,
+  direction: SortDirection,
+): CompactionProcessFile[] {
+  const sign = direction === 'asc' ? 1 : -1
+  return [...files].sort((a, b) => {
+    if (key === 'file-id') return a.fileId.localeCompare(b.fileId) * sign
+    const delta = fileSortValue(a, key) - fileSortValue(b, key)
+    if (delta !== 0) return delta * sign
+    return a.fileId.localeCompare(b.fileId) * sign
+  })
+}
+
+export function getMergeTimeSeverity(task: CompactionProcessTask, tasks: CompactionProcessTask[]): MergeTimeSeverity {
+  if (task.mergeMillis === null) return 'none'
+  const withMerge = tasks.filter(t => t.mergeMillis !== null)
+  const sorted = sortCompactionProcessTasks(withMerge, 'merge', 'desc')
+  const rank = sorted.findIndex(t => t === task)
+  if (rank < 0) return 'none'
+  const percentile = (rank + 1) / sorted.length
+  if (percentile <= 0.1) return 'red'
+  if (percentile <= 0.3) return 'orange'
+  if (percentile <= 0.5) return 'yellow'
+  return 'green'
+}
+
 function sortValue(task: CompactionProcessTask, key: CompactionProcessSortKey): number {
   switch (key) {
     case 'time': return task.timestamp
@@ -265,6 +303,15 @@ function sortValue(task: CompactionProcessTask, key: CompactionProcessSortKey): 
     case 'output-files': return task.outputFileCount
     case 'input-size': return task.inputBytes
     case 'output-size': return task.outputBytes
+  }
+}
+
+function fileSortValue(file: CompactionProcessFile, key: CompactionProcessFileSortKey): number {
+  switch (key) {
+    case 'level': return file.level
+    case 'size': return file.sizeBytes
+    case 'time-range': return file.timeRange[0]
+    case 'file-id': return 0
   }
 }
 
@@ -300,16 +347,14 @@ function parseCompactionProcessLine(line: string): CompactionProcessTask | null 
     fanOut,
     inputBytes: inputFiles.reduce((sum, file) => sum + file.sizeBytes, 0),
     outputBytes: outputFiles.reduce((sum, file) => sum + file.sizeBytes, 0),
+    inputFiles,
+    outputFiles,
     pickMillis: extractDurationMillis(line, ['pick_time', 'pick_elapsed', 'pick duration']),
     mergeMillis: extractDurationMillis(line, ['merge_time', 'merge_elapsed', 'merge duration', 'compaction_time']),
   }
 }
 
-interface FileStats {
-  fileId: string
-  sizeBytes: number
-  timeRange: [number, number]
-}
+type FileStats = CompactionProcessFile
 
 function parseCompactionLine(line: string, alive: Map<string, AliveFile>): void {
   const timestamp = extractTimestamp(line)
@@ -420,7 +465,7 @@ function parseFlushLine(line: string, alive: Map<string, AliveFile>): void {
 }
 
 function parseFileStatsSection(section: string): FileStats[] | null {
-  const fileRegex = /file_id:\s*([0-9a-f-]+)\s*,\s*time_range:\s*\(([^,]+),\s*([^\)]+)\)\s*,\s*level:\s*\d+,\s*file_size:\s*([0-9.]+)([KMG]iB)/g
+  const fileRegex = /file_id:\s*([0-9a-f-]+)\s*,\s*time_range:\s*\(([^,]+),\s*([^\)]+)\)\s*,\s*level:\s*(\d+),\s*file_size:\s*([0-9.]+)([KMG]iB)/g
   const files: FileStats[] = []
   let match
 
@@ -428,11 +473,12 @@ function parseFileStatsSection(section: string): FileStats[] | null {
     const fileId = match[1]
     const start = parseLogTime(match[2].trim())
     const end = parseLogTime(match[3].trim())
-    const sizeBytes = parseSize(match[4], match[5])
+    const level = parseInt(match[4], 10)
+    const sizeBytes = parseSize(match[5], match[6])
 
     if (start === null || end === null || sizeBytes === null) continue
 
-    files.push({ fileId, sizeBytes, timeRange: [start, end] })
+    files.push({ fileId, level, sizeBytes, timeRange: [start, end] })
   }
 
   return files.length > 0 ? files : null

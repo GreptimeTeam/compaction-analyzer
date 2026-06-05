@@ -13,4 +13,11 @@ describe('CompactionProcessPanel table', () => {
     expect(outputCount).toBeGreaterThan(inputSize)
     expect(outputSize).toBeGreaterThan(outputCount)
   })
+
+  it('sorts detail file lists by time range ascending by default', () => {
+    expect(source).toContain("const inputFileSortKey = ref<CompactionProcessFileSortKey>('time-range')")
+    expect(source).toContain("const inputFileSortDirection = ref<SortDirection>('asc')")
+    expect(source).toContain("const outputFileSortKey = ref<CompactionProcessFileSortKey>('time-range')")
+    expect(source).toContain("const outputFileSortDirection = ref<SortDirection>('asc')")
+  })
 })

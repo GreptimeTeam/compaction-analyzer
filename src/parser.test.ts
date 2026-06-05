@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { analyzeCompactionProcessTasks, analyzeCompactionProcesses, sortCompactionProcessTasks } from './parser'
+import { analyzeCompactionProcessTasks, analyzeCompactionProcesses, getMergeTimeSeverity, sortCompactionProcessFiles, sortCompactionProcessTasks } from './parser'
 
 describe('analyzeCompactionProcesses', () => {
   it('summarizes compaction tasks from raw log text', () => {
@@ -26,6 +26,29 @@ describe('analyzeCompactionProcesses', () => {
       pickMillis: 12,
       mergeMillis: 345,
     })
+    expect(result.tasks[0].inputFiles).toEqual([
+      expect.objectContaining({
+        fileId: '86aa8733-624c-4d24-9a0e-a7b82c360f56',
+        level: 0,
+        sizeBytes: 186122240,
+      }),
+      expect.objectContaining({
+        fileId: 'd3518a5a-ff01-46f6-b02a-a811649f4610',
+        level: 1,
+        sizeBytes: 546832384,
+      }),
+    ])
+    expect(result.tasks[0].outputFiles).toEqual([
+      expect.objectContaining({
+        fileId: '24c730aa-b14b-43e8-8a34-1a0f6c8ed53e',
+        level: 2,
+        sizeBytes: 698351616,
+      }),
+    ])
+    expect(result.tasks[0].inputFiles[0].timeRange).toEqual([
+      new Date('2026-01-09T13:29:42.016Z').getTime(),
+      new Date('2026-01-09T13:33:42.361Z').getTime(),
+    ])
   })
 
   it('summarizes a region-filtered task list', () => {
@@ -39,6 +62,8 @@ describe('analyzeCompactionProcesses', () => {
         fanOut: 2,
         inputBytes: 200,
         outputBytes: 180,
+        inputFiles: [],
+        outputFiles: [],
         pickMillis: 10,
         mergeMillis: 100,
       },
@@ -51,6 +76,8 @@ describe('analyzeCompactionProcesses', () => {
         fanOut: 2,
         inputBytes: 400,
         outputBytes: 360,
+        inputFiles: [],
+        outputFiles: [],
         pickMillis: null,
         mergeMillis: 300,
       },
@@ -82,6 +109,35 @@ describe('analyzeCompactionProcesses', () => {
     expect(sortCompactionProcessTasks(tasks, 'output-size', 'desc').map(task => task.outputBytes)).toEqual([300, 200, 100])
     expect(sortCompactionProcessTasks(tasks, 'time', 'asc')).not.toBe(tasks)
   })
+
+  it('assigns merge time colors by percentile band', () => {
+    const tasks = [1000, 900, 800, 700, 600, 500, 400, 300, 200, 100].map((mergeMillis, i) => makeTask({
+      timestamp: i,
+      mergeMillis,
+    }))
+
+    expect(getMergeTimeSeverity(tasks[0], tasks)).toBe('red')
+    expect(getMergeTimeSeverity(tasks[1], tasks)).toBe('orange')
+    expect(getMergeTimeSeverity(tasks[2], tasks)).toBe('orange')
+    expect(getMergeTimeSeverity(tasks[3], tasks)).toBe('yellow')
+    expect(getMergeTimeSeverity(tasks[4], tasks)).toBe('yellow')
+    expect(getMergeTimeSeverity(tasks[5], tasks)).toBe('green')
+    expect(getMergeTimeSeverity(makeTask({ mergeMillis: null }), tasks)).toBe('none')
+  })
+
+  it('sorts compaction detail files by requested columns', () => {
+    const files = [
+      { fileId: 'c-file', level: 2, sizeBytes: 300, timeRange: [30, 40] as [number, number] },
+      { fileId: 'a-file', level: 3, sizeBytes: 100, timeRange: [10, 20] as [number, number] },
+      { fileId: 'b-file', level: 1, sizeBytes: 200, timeRange: [20, 30] as [number, number] },
+    ]
+
+    expect(sortCompactionProcessFiles(files, 'file-id', 'asc').map(file => file.fileId)).toEqual(['a-file', 'b-file', 'c-file'])
+    expect(sortCompactionProcessFiles(files, 'level', 'asc').map(file => file.level)).toEqual([1, 2, 3])
+    expect(sortCompactionProcessFiles(files, 'size', 'desc').map(file => file.sizeBytes)).toEqual([300, 200, 100])
+    expect(sortCompactionProcessFiles(files, 'time-range', 'desc').map(file => file.timeRange[0])).toEqual([30, 20, 10])
+    expect(sortCompactionProcessFiles(files, 'file-id', 'asc')).not.toBe(files)
+  })
 })
 
 function makeTask(overrides: Partial<ReturnType<typeof analyzeCompactionProcessTasks>['tasks'][number]>) {
@@ -94,6 +150,8 @@ function makeTask(overrides: Partial<ReturnType<typeof analyzeCompactionProcessT
     fanOut: 1,
     inputBytes: 1,
     outputBytes: 1,
+    inputFiles: [],
+    outputFiles: [],
     pickMillis: null,
     mergeMillis: null,
     ...overrides,
