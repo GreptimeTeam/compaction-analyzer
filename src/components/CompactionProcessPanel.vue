@@ -1,7 +1,7 @@
 <script lang="ts">
-import { defineComponent, type PropType } from 'vue'
+import { computed, defineComponent, ref, type PropType } from 'vue'
 import { formatBytes, formatDuration } from '../visualization'
-import type { CompactionProcessAnalysis, CompactionProcessTask } from '../parser'
+import { sortCompactionProcessTasks, type CompactionProcessAnalysis, type CompactionProcessSortKey, type CompactionProcessTask, type SortDirection } from '../parser'
 
 export default defineComponent({
   name: 'CompactionProcessPanel',
@@ -11,7 +11,26 @@ export default defineComponent({
       required: true,
     },
   },
-  setup() {
+  setup(props) {
+    const sortKey = ref<CompactionProcessSortKey>('time')
+    const sortDirection = ref<SortDirection>('desc')
+
+    const sortedTasks = computed(() => sortCompactionProcessTasks(props.analysis.tasks, sortKey.value, sortDirection.value))
+
+    function setSort(key: CompactionProcessSortKey) {
+      if (sortKey.value === key) {
+        sortDirection.value = sortDirection.value === 'asc' ? 'desc' : 'asc'
+      } else {
+        sortKey.value = key
+        sortDirection.value = key === 'time' ? 'desc' : 'asc'
+      }
+    }
+
+    function sortMark(key: CompactionProcessSortKey): string {
+      if (sortKey.value !== key) return ''
+      return sortDirection.value === 'asc' ? '↑' : '↓'
+    }
+
     function formatNum(n: number): string {
       return n.toLocaleString(undefined, { maximumFractionDigits: 2 })
     }
@@ -24,7 +43,7 @@ export default defineComponent({
       return new Date(task.timestamp).toISOString().slice(0, 19) + 'Z'
     }
 
-    return { formatBytes, formatDuration, formatNum, formatMaybeDuration, taskTime }
+    return { formatBytes, formatDuration, formatNum, formatMaybeDuration, setSort, sortedTasks, sortMark, taskTime }
   },
 })
 </script>
@@ -35,7 +54,7 @@ export default defineComponent({
       <div>
         <p class="eyebrow">Process analysis</p>
         <h2>Compaction task timeline</h2>
-        <p class="hero-copy">Summarizes pasted or uploaded compaction logs by merge cost, pick cost, and file fan-out.</p>
+        <p class="hero-copy">Summarizes pasted or uploaded compaction logs by merge cost, pick cost, file counts, and IO size.</p>
       </div>
       <div class="hero-stat">
         <span class="hero-value">{{ formatNum(analysis.totalTasks) }}</span>
@@ -82,22 +101,24 @@ export default defineComponent({
       <h3>Compaction Tasks</h3>
       <div class="task-table">
         <div class="task-row header">
-          <span>Time</span>
+          <button class="sort-header" @click="setSort('time')">Time {{ sortMark('time') }}</button>
           <span>Region</span>
-          <span>In -> Out</span>
-          <span>Fan-out</span>
-          <span>Merge</span>
+          <button class="sort-header" @click="setSort('input-files')">Input file num {{ sortMark('input-files') }}</button>
+          <button class="sort-header" @click="setSort('input-size')">Input size {{ sortMark('input-size') }}</button>
+          <button class="sort-header" @click="setSort('output-files')">Output file num {{ sortMark('output-files') }}</button>
+          <button class="sort-header" @click="setSort('output-size')">Output size {{ sortMark('output-size') }}</button>
+          <button class="sort-header" @click="setSort('merge')">Merge time {{ sortMark('merge') }}</button>
           <span>Pick</span>
-          <span>Bytes</span>
         </div>
-        <div v-for="task in analysis.tasks" :key="task.timestamp + '-' + task.regionId" class="task-row">
+        <div v-for="task in sortedTasks" :key="task.timestamp + '-' + task.regionId" class="task-row">
           <span class="mono">{{ taskTime(task) }}</span>
           <span>{{ task.regionId }} / {{ task.tableId }}</span>
-          <span>{{ task.inputFileCount }} -> {{ task.outputFileCount }}</span>
-          <span>{{ formatNum(task.fanOut) }}</span>
+          <span>{{ formatNum(task.inputFileCount) }}</span>
+          <span>{{ formatBytes(task.inputBytes) }}</span>
+          <span>{{ formatNum(task.outputFileCount) }}</span>
+          <span>{{ formatBytes(task.outputBytes) }}</span>
           <span>{{ formatMaybeDuration(task.mergeMillis) }}</span>
           <span>{{ formatMaybeDuration(task.pickMillis) }}</span>
-          <span>{{ formatBytes(task.inputBytes) }} -> {{ formatBytes(task.outputBytes) }}</span>
         </div>
       </div>
     </section>
@@ -206,12 +227,12 @@ export default defineComponent({
 }
 
 .task-table {
-  min-width: 900px;
+  min-width: 1040px;
 }
 
 .task-row {
   display: grid;
-  grid-template-columns: 180px 180px 90px 80px 100px 100px 1fr;
+  grid-template-columns: 180px 180px 120px 130px 120px 120px 110px 90px;
   gap: 12px;
   align-items: center;
   padding: 12px 18px;
@@ -226,6 +247,22 @@ export default defineComponent({
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.04em;
+}
+
+.sort-header {
+  border: none;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  letter-spacing: inherit;
+  text-align: left;
+  text-transform: inherit;
+}
+
+.sort-header:hover {
+  color: var(--primary);
 }
 
 .mono {

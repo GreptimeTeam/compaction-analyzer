@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { analyzeCompactionProcessTasks, analyzeCompactionProcesses } from './parser'
+import { analyzeCompactionProcessTasks, analyzeCompactionProcesses, sortCompactionProcessTasks } from './parser'
 
 describe('analyzeCompactionProcesses', () => {
   it('summarizes compaction tasks from raw log text', () => {
@@ -66,4 +66,36 @@ describe('analyzeCompactionProcesses', () => {
     expect(result.averagePickMillis).toBe(10)
     expect(result.averageMergeMillis).toBe(200)
   })
+
+  it('sorts process tasks by requested table columns', () => {
+    const tasks = [
+      makeTask({ timestamp: 30, inputFileCount: 2, outputFileCount: 2, inputBytes: 300, outputBytes: 100, mergeMillis: null }),
+      makeTask({ timestamp: 10, inputFileCount: 4, outputFileCount: 1, inputBytes: 100, outputBytes: 300, mergeMillis: 300 }),
+      makeTask({ timestamp: 20, inputFileCount: 1, outputFileCount: 3, inputBytes: 200, outputBytes: 200, mergeMillis: 100 }),
+    ]
+
+    expect(sortCompactionProcessTasks(tasks, 'time', 'asc').map(task => task.timestamp)).toEqual([10, 20, 30])
+    expect(sortCompactionProcessTasks(tasks, 'merge', 'desc').map(task => task.mergeMillis)).toEqual([300, 100, null])
+    expect(sortCompactionProcessTasks(tasks, 'input-files', 'desc').map(task => task.inputFileCount)).toEqual([4, 2, 1])
+    expect(sortCompactionProcessTasks(tasks, 'output-files', 'asc').map(task => task.outputFileCount)).toEqual([1, 2, 3])
+    expect(sortCompactionProcessTasks(tasks, 'input-size', 'asc').map(task => task.inputBytes)).toEqual([100, 200, 300])
+    expect(sortCompactionProcessTasks(tasks, 'output-size', 'desc').map(task => task.outputBytes)).toEqual([300, 200, 100])
+    expect(sortCompactionProcessTasks(tasks, 'time', 'asc')).not.toBe(tasks)
+  })
 })
+
+function makeTask(overrides: Partial<ReturnType<typeof analyzeCompactionProcessTasks>['tasks'][number]>) {
+  return {
+    timestamp: 0,
+    regionId: 1,
+    tableId: 1,
+    inputFileCount: 1,
+    outputFileCount: 1,
+    fanOut: 1,
+    inputBytes: 1,
+    outputBytes: 1,
+    pickMillis: null,
+    mergeMillis: null,
+    ...overrides,
+  }
+}

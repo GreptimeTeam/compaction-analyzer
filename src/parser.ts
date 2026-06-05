@@ -47,6 +47,9 @@ export interface CompactionProcessAnalysis {
   tasks: CompactionProcessTask[]
 }
 
+export type CompactionProcessSortKey = 'time' | 'merge' | 'input-files' | 'output-files' | 'input-size' | 'output-size'
+export type SortDirection = 'asc' | 'desc'
+
 // ── Format detection ──
 
 export function isMysqlFormat(input: string): boolean {
@@ -238,6 +241,30 @@ export function analyzeCompactionProcessTasks(tasks: CompactionProcessTask[]): C
     averagePickMillis: averageNullable(tasks.map(task => task.pickMillis)),
     averageMergeMillis: averageNullable(tasks.map(task => task.mergeMillis)),
     tasks,
+  }
+}
+
+export function sortCompactionProcessTasks(
+  tasks: CompactionProcessTask[],
+  key: CompactionProcessSortKey,
+  direction: SortDirection,
+): CompactionProcessTask[] {
+  const sign = direction === 'asc' ? 1 : -1
+  return [...tasks].sort((a, b) => {
+    const delta = sortValue(a, key) - sortValue(b, key)
+    if (delta !== 0) return delta * sign
+    return (a.timestamp - b.timestamp) * sign
+  })
+}
+
+function sortValue(task: CompactionProcessTask, key: CompactionProcessSortKey): number {
+  switch (key) {
+    case 'time': return task.timestamp
+    case 'merge': return task.mergeMillis ?? -Infinity
+    case 'input-files': return task.inputFileCount
+    case 'output-files': return task.outputFileCount
+    case 'input-size': return task.inputBytes
+    case 'output-size': return task.outputBytes
   }
 }
 
