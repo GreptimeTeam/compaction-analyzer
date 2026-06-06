@@ -52,4 +52,16 @@ describe('CompactionProcessPanel table', () => {
     expect(source).toContain('v-for="link in graphLayout.graphLinks"')
     expect(source).toContain('v-for="node in graphLayout.fileNodes"')
   })
+
+  it('clips graph links to node boundaries instead of node centers', () => {
+    expect(source).toContain('fromRadius:')
+    expect(source).toContain('toRadius:')
+    expect(source).toContain('function clipLinkEndpoint')
+    expect(source).toContain('const start = clipLinkEndpoint')
+    expect(source).toContain('const end = clipLinkEndpoint')
+  })
+
+  it('aims graph arrows along the center-to-center line', () => {
+    expect(source).toContain('return `M ${start.x} ${start.y} L ${end.x} ${end.y}`')
+  })
 })

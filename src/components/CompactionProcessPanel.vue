@@ -33,8 +33,10 @@ interface GraphLink {
   id: string
   fromX: number
   fromY: number
+  fromRadius: number
   toX: number
   toY: number
+  toRadius: number
   kind: 'input' | 'output'
 }
 
@@ -131,12 +133,12 @@ export default defineComponent({
         task.inputFiles.forEach((file) => {
           const fileNode = fileNodeById.get(file.fileId)
           if (!fileNode) return
-          graphLinks.push({ id: `in-${taskNode.id}-${file.fileId}`, fromX: fileNode.x, fromY: fileNode.y, toX: taskNode.x, toY: taskNode.y, kind: 'input' })
+          graphLinks.push({ id: `in-${taskNode.id}-${file.fileId}`, fromX: fileNode.x, fromY: fileNode.y, fromRadius: fileNodeRadius(fileNode.file.sizeBytes), toX: taskNode.x, toY: taskNode.y, toRadius: 24, kind: 'input' })
         })
         task.outputFiles.forEach((file) => {
           const fileNode = fileNodeById.get(file.fileId)
           if (!fileNode) return
-          graphLinks.push({ id: `out-${taskNode.id}-${file.fileId}`, fromX: taskNode.x, fromY: taskNode.y, toX: fileNode.x, toY: fileNode.y, kind: 'output' })
+          graphLinks.push({ id: `out-${taskNode.id}-${file.fileId}`, fromX: taskNode.x, fromY: taskNode.y, fromRadius: 24, toX: fileNode.x, toY: fileNode.y, toRadius: fileNodeRadius(fileNode.file.sizeBytes), kind: 'output' })
         })
       })
 
@@ -275,9 +277,20 @@ export default defineComponent({
       return `M ${startX} ${startY} C ${startX + controlOffset} ${startY}, ${endX - controlOffset} ${endY}, ${endX} ${endY}`
     }
 
+    function clipLinkEndpoint(fromX: number, fromY: number, toX: number, toY: number, radius: number): { x: number; y: number } {
+      const dx = toX - fromX
+      const dy = toY - fromY
+      const length = Math.hypot(dx, dy) || 1
+      return {
+        x: fromX + (dx / length) * radius,
+        y: fromY + (dy / length) * radius,
+      }
+    }
+
     function graphLinkPath(link: GraphLink): string {
-      const control = Math.max(80, Math.abs(link.toX - link.fromX) * 0.38)
-      return `M ${link.fromX} ${link.fromY} C ${link.fromX + control} ${link.fromY}, ${link.toX - control} ${link.toY}, ${link.toX} ${link.toY}`
+      const start = clipLinkEndpoint(link.fromX, link.fromY, link.toX, link.toY, link.fromRadius + 6)
+      const end = clipLinkEndpoint(link.toX, link.toY, link.fromX, link.fromY, link.toRadius + 10)
+      return `M ${start.x} ${start.y} L ${end.x} ${end.y}`
     }
 
     function graphFileNodeClass(node: GraphFileNode): string {
