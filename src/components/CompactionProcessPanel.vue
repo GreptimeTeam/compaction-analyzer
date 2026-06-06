@@ -71,12 +71,35 @@ export default defineComponent({
     const graphDragThreshold = 4
     const selectedGraphNode = ref<SelectedGraphNode | null>(null)
     const pendingGraphSelection = ref<SelectedGraphNode | null>(null)
+    const tracedGraphNode = ref<SelectedGraphNode | null>(null)
     const graphSvgRef = ref<SVGSVGElement | null>(null)
     const graphCanvasRef = ref<HTMLElement | null>(null)
     const graphViewportRevision = ref(0)
 
     const sortedTasks = computed(() => sortCompactionProcessTasks(props.analysis.tasks, sortKey.value, sortDirection.value))
     const graphTasks = computed(() => sortCompactionProcessTasks(props.analysis.tasks, 'time', 'asc'))
+    const traceGraphTasks = computed(() => {
+      if (!tracedGraphNode.value) return []
+      const taskIds = new Set<string>()
+      const seedFileIds = new Set<string>()
+
+      if (tracedGraphNode.value.kind === 'file') {
+        seedFileIds.add(tracedGraphNode.value.node.file.fileId)
+      } else {
+        const task = tracedGraphNode.value.node.task
+        taskIds.add(taskKey(task))
+        task.inputFiles.forEach(file => seedFileIds.add(file.fileId))
+        task.outputFiles.forEach(file => seedFileIds.add(file.fileId))
+      }
+
+      const ancestorFileIds = new Set(seedFileIds)
+      const descendantFileIds = new Set(seedFileIds)
+      const tracedFileIds = new Set(seedFileIds)
+      addAncestorTasks(ancestorFileIds, taskIds, tracedFileIds)
+      addDescendantTasks(descendantFileIds, taskIds, tracedFileIds)
+      return graphTasks.value.filter(task => taskIds.has(taskKey(task)))
+    })
+    const graphLayoutTasks = computed(() => tracedGraphNode.value ? traceGraphTasks.value : graphTasks.value)
     const graphHeight = computed(() => Math.max(360, graphTasks.value.length * 150 + 80))
     const graphTransform = computed(() => `translate(${graphPan.value.x} ${graphPan.value.y}) scale(${graphScale.value})`)
     const isGraphDragging = computed(() => graphDrag.value !== null)
@@ -128,7 +151,7 @@ export default defineComponent({
         return node
       }
 
-      graphTasks.value.forEach((task, taskIndex) => {
+      graphLayoutTasks.value.forEach((task, taskIndex) => {
         const inputDepth = task.inputFiles.reduce((max, file) => Math.max(max, Math.floor((fileNodeById.get(file.fileId)?.x ?? 120) / fileColumnGap)), 0)
         const taskColumn = inputDepth + 1
         const outputColumn = taskColumn + 1
@@ -156,7 +179,7 @@ export default defineComponent({
         })
       })
 
-      graphTasks.value.forEach((task) => {
+      graphLayoutTasks.value.forEach((task) => {
         const taskNode = taskNodes.find(node => node.id === taskKey(task))
         if (!taskNode) return
         task.inputFiles.forEach((file) => {
@@ -362,6 +385,50 @@ export default defineComponent({
       return `graph-file-node ${node.role}`
     }
 
+    function addAncestorTasks(fileIds: Set<string>, taskIds: Set<string>, tracedFileIds: Set<string>) {
+      let changed = true
+      while (changed) {
+        changed = false
+        for (const task of [...graphTasks.value].reverse()) {
+          if (!task.outputFiles.some(file => fileIds.has(file.fileId))) continue
+          const key = taskKey(task)
+          if (!taskIds.has(key)) {
+            taskIds.add(key)
+            changed = true
+          }
+          task.inputFiles.forEach((file) => {
+            if (!fileIds.has(file.fileId)) changed = true
+            fileIds.add(file.fileId)
+            tracedFileIds.add(file.fileId)
+          })
+          task.outputFiles.forEach((file) => {
+            tracedFileIds.add(file.fileId)
+          })
+        }
+      }
+    }
+
+    function addDescendantTasks(fileIds: Set<string>, taskIds: Set<string>, tracedFileIds: Set<string>) {
+      let changed = true
+      while (changed) {
+        changed = false
+        for (const task of graphTasks.value) {
+          if (!task.inputFiles.some(file => fileIds.has(file.fileId))) continue
+          const key = taskKey(task)
+          if (!taskIds.has(key)) {
+            taskIds.add(key)
+            changed = true
+          }
+          task.inputFiles.forEach(file => tracedFileIds.add(file.fileId))
+          task.outputFiles.forEach((file) => {
+            if (!fileIds.has(file.fileId)) changed = true
+            fileIds.add(file.fileId)
+            tracedFileIds.add(file.fileId)
+          })
+        }
+      }
+    }
+
     function selectGraphFile(node: GraphFileNode) {
       selectedGraphNode.value = { kind: 'file', node }
     }
@@ -380,6 +447,21 @@ export default defineComponent({
 
     function clearGraphSelection() {
       selectedGraphNode.value = null
+    }
+
+    function traceGraphNode() {
+      if (!selectedGraphNode.value) return
+      tracedGraphNode.value = selectedGraphNode.value
+      graphPan.value = { x: 0, y: 0 }
+      graphScale.value = 1
+      refreshGraphViewport()
+    }
+
+    function clearGraphTrace() {
+      tracedGraphNode.value = null
+      graphPan.value = { x: 0, y: 0 }
+      graphScale.value = 1
+      refreshGraphViewport()
     }
 
     function graphCssPoint(x: number, y: number): { x: number; y: number } {
@@ -463,7 +545,7 @@ export default defineComponent({
       graphDidDrag.value = false
     }
 
-    return { activeTab, clearGraphSelection, expandedTaskKey, fileNodeClass, fileNodeRadius, fileNodeX, fileNodeY, fileSortMark, fileTimeRange, formatBytes, formatDuration, formatNum, formatMaybeDuration, graphCanvasRef, graphFileLabel, graphFileShortLabel, graphFileNodeClass, graphHeight, graphLayout, graphLinkPath, graphMinimapViewport, graphRowY, graphScale, graphPan, graphSvgRef, graphTasks, graphTransform, handleGraphPointerCancel, handleGraphPointerDown, handleGraphPointerMove, handleGraphPointerUp, handleGraphWheel, isGraphDragging, lineageLinks, lineagePath, mergeTimeClass, prepareGraphFileSelection, prepareGraphTaskSelection, refreshGraphViewport, selectedGraphNode, selectedGraphPopoverStyle, selectGraphFile, selectGraphTask, setFileSort, setSort, showGraphMinimap, sortedFiles, sortedTasks, sortMark, taskKey, taskNodeX, taskTime, toggleTask }
+    return { activeTab, clearGraphSelection, clearGraphTrace, expandedTaskKey, fileNodeClass, fileNodeRadius, fileNodeX, fileNodeY, fileSortMark, fileTimeRange, formatBytes, formatDuration, formatNum, formatMaybeDuration, graphCanvasRef, graphFileLabel, graphFileShortLabel, graphFileNodeClass, graphHeight, graphLayout, graphLinkPath, graphMinimapViewport, graphRowY, graphScale, graphPan, graphSvgRef, graphTasks, graphTransform, handleGraphPointerCancel, handleGraphPointerDown, handleGraphPointerMove, handleGraphPointerUp, handleGraphWheel, isGraphDragging, lineageLinks, lineagePath, mergeTimeClass, prepareGraphFileSelection, prepareGraphTaskSelection, refreshGraphViewport, selectedGraphNode, selectedGraphPopoverStyle, selectGraphFile, selectGraphTask, setFileSort, setSort, showGraphMinimap, sortedFiles, sortedTasks, sortMark, taskKey, taskNodeX, taskTime, toggleTask, traceGraphNode, tracedGraphNode }
   },
 })
 </script>
@@ -528,6 +610,7 @@ export default defineComponent({
           <h3>Compaction graph</h3>
           <p>Input files flow into each compaction task and produce output files. Circle size is scaled by file size.</p>
         </div>
+        <button v-if="tracedGraphNode" class="graph-trace-clear" @click="clearGraphTrace">Clear Trace</button>
         <div class="graph-legend">
           <span><i class="legend-dot input"></i>Input file</span>
           <span><i class="legend-dot output"></i>Output file</span>
@@ -562,6 +645,7 @@ export default defineComponent({
           </g>
         </svg>
         <div v-if="selectedGraphNode" class="graph-popover" :style="selectedGraphPopoverStyle">
+          <button class="graph-trace-button" @click.stop="traceGraphNode">Trace</button>
           <template v-if="selectedGraphNode.kind === 'file'">
             <h4>File {{ selectedGraphNode.node.file.fileId }}</h4>
             <div><span>Level</span><strong>{{ selectedGraphNode.node.file.level }}</strong></div>
@@ -819,6 +903,36 @@ export default defineComponent({
   color: var(--text-secondary);
   font-size: 11px;
   white-space: nowrap;
+}
+
+.graph-trace-clear,
+.graph-trace-button {
+  border: 1px solid rgba(96, 165, 250, 0.45);
+  border-radius: 999px;
+  background: rgba(37, 99, 235, 0.22);
+  color: #dbeafe;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.graph-trace-clear {
+  align-self: center;
+  padding: 7px 12px;
+}
+
+.graph-trace-button {
+  float: right;
+  margin: 0 0 8px 10px;
+  padding: 5px 10px;
+  pointer-events: auto;
+}
+
+.graph-trace-clear:hover,
+.graph-trace-button:hover {
+  border-color: rgba(147, 197, 253, 0.8);
+  background: rgba(37, 99, 235, 0.38);
 }
 
 .legend-dot {

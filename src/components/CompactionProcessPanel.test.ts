@@ -164,6 +164,27 @@ describe('CompactionProcessPanel table', () => {
     expect(source).toContain('Math.max(900, ...fileNodes.map')
   })
 
+  it('supports tracing ancestors and descendants for the selected graph node', () => {
+    expect(source).toContain('const tracedGraphNode = ref<SelectedGraphNode | null>(null)')
+    expect(source).toContain('const traceGraphTasks = computed(() =>')
+    expect(source).toContain('const ancestorFileIds = new Set(seedFileIds)')
+    expect(source).toContain('const descendantFileIds = new Set(seedFileIds)')
+    expect(source).toContain('const tracedFileIds = new Set(seedFileIds)')
+    expect(source).toContain('function traceGraphNode')
+    expect(source).toContain('function clearGraphTrace')
+    expect(source).toContain('function addAncestorTasks')
+    expect(source).toContain('function addDescendantTasks')
+    expect(source).toContain('task.inputFiles.some(file => fileIds.has(file.fileId))')
+    expect(source).toContain('task.outputFiles.some(file => fileIds.has(file.fileId))')
+    expect(source).not.toContain('task.inputFiles.forEach(file => fileIds.add(file.fileId))')
+    expect(source).toContain('const graphLayoutTasks = computed(() => tracedGraphNode.value ? traceGraphTasks.value : graphTasks.value)')
+    expect(source).toContain('graphLayoutTasks.value.forEach')
+    expect(source).toContain('@click.stop="traceGraphNode"')
+    expect(source).toContain('Trace')
+    expect(source).toContain('@click="clearGraphTrace"')
+    expect(source).toContain('Clear Trace')
+  })
+
   it('styles graph interaction affordances for panning and readable overlays', () => {
     expect(source).toContain('const isGraphDragging = computed(() => graphDrag.value !== null)')
     expect(source).toContain(':class="[\'graph-canvas\', { dragging: isGraphDragging }]"')
