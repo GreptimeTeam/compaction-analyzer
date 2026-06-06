@@ -185,6 +185,22 @@ describe('CompactionProcessPanel table', () => {
     expect(source).toContain('Clear Trace')
   })
 
+  it('renders file time ranges as aligned start and end rows', () => {
+    expect(source).toContain('function fileTimeStart')
+    expect(source).toContain('function fileTimeEnd')
+    expect(source).toContain('<span>Start</span><strong>{{ fileTimeStart(selectedGraphNode.node.file) }}</strong>')
+    expect(source).toContain('<span>End</span><strong>{{ fileTimeEnd(selectedGraphNode.node.file) }}</strong>')
+    expect(source).toContain('class="file-time-range mono"')
+    expect(source).toContain('<span class="time-range-label">Start</span>')
+    expect(source).toContain('<span class="time-range-label">End</span>')
+    expect(source).toContain('{{ fileTimeStart(file) }}')
+    expect(source).toContain('{{ fileTimeEnd(file) }}')
+    expect(source).toContain('.file-time-range {')
+    expect(source).toContain('.time-range-line {')
+    expect(source).toContain('.time-range-label {')
+    expect(source).not.toContain('<span class="mono">{{ fileTimeRange(file) }}</span>')
+  })
+
   it('styles graph interaction affordances for panning and readable overlays', () => {
     expect(source).toContain('const isGraphDragging = computed(() => graphDrag.value !== null)')
     expect(source).toContain(':class="[\'graph-canvas\', { dragging: isGraphDragging }]"')

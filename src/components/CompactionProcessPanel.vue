@@ -322,6 +322,14 @@ export default defineComponent({
       return `${new Date(file.timeRange[0]).toISOString().slice(0, 19)}Z - ${new Date(file.timeRange[1]).toISOString().slice(0, 19)}Z`
     }
 
+    function fileTimeStart(file: CompactionProcessFile): string {
+      return new Date(file.timeRange[0]).toISOString().slice(0, 19) + 'Z'
+    }
+
+    function fileTimeEnd(file: CompactionProcessFile): string {
+      return new Date(file.timeRange[1]).toISOString().slice(0, 19) + 'Z'
+    }
+
     function graphRowY(taskIndex: number): number {
       return taskIndex * 150 + 90
     }
@@ -545,7 +553,7 @@ export default defineComponent({
       graphDidDrag.value = false
     }
 
-    return { activeTab, clearGraphSelection, clearGraphTrace, expandedTaskKey, fileNodeClass, fileNodeRadius, fileNodeX, fileNodeY, fileSortMark, fileTimeRange, formatBytes, formatDuration, formatNum, formatMaybeDuration, graphCanvasRef, graphFileLabel, graphFileShortLabel, graphFileNodeClass, graphHeight, graphLayout, graphLinkPath, graphMinimapViewport, graphRowY, graphScale, graphPan, graphSvgRef, graphTasks, graphTransform, handleGraphPointerCancel, handleGraphPointerDown, handleGraphPointerMove, handleGraphPointerUp, handleGraphWheel, isGraphDragging, lineageLinks, lineagePath, mergeTimeClass, prepareGraphFileSelection, prepareGraphTaskSelection, refreshGraphViewport, selectedGraphNode, selectedGraphPopoverStyle, selectGraphFile, selectGraphTask, setFileSort, setSort, showGraphMinimap, sortedFiles, sortedTasks, sortMark, taskKey, taskNodeX, taskTime, toggleTask, traceGraphNode, tracedGraphNode }
+    return { activeTab, clearGraphSelection, clearGraphTrace, expandedTaskKey, fileNodeClass, fileNodeRadius, fileNodeX, fileNodeY, fileSortMark, fileTimeEnd, fileTimeRange, fileTimeStart, formatBytes, formatDuration, formatNum, formatMaybeDuration, graphCanvasRef, graphFileLabel, graphFileShortLabel, graphFileNodeClass, graphHeight, graphLayout, graphLinkPath, graphMinimapViewport, graphRowY, graphScale, graphPan, graphSvgRef, graphTasks, graphTransform, handleGraphPointerCancel, handleGraphPointerDown, handleGraphPointerMove, handleGraphPointerUp, handleGraphWheel, isGraphDragging, lineageLinks, lineagePath, mergeTimeClass, prepareGraphFileSelection, prepareGraphTaskSelection, refreshGraphViewport, selectedGraphNode, selectedGraphPopoverStyle, selectGraphFile, selectGraphTask, setFileSort, setSort, showGraphMinimap, sortedFiles, sortedTasks, sortMark, taskKey, taskNodeX, taskTime, toggleTask, traceGraphNode, tracedGraphNode }
   },
 })
 </script>
@@ -650,7 +658,8 @@ export default defineComponent({
             <h4>File {{ selectedGraphNode.node.file.fileId }}</h4>
             <div><span>Level</span><strong>{{ selectedGraphNode.node.file.level }}</strong></div>
             <div><span>Size</span><strong>{{ formatBytes(selectedGraphNode.node.file.sizeBytes) }}</strong></div>
-            <div><span>Time range</span><strong>{{ fileTimeRange(selectedGraphNode.node.file) }}</strong></div>
+            <div><span>Start</span><strong>{{ fileTimeStart(selectedGraphNode.node.file) }}</strong></div>
+            <div><span>End</span><strong>{{ fileTimeEnd(selectedGraphNode.node.file) }}</strong></div>
             <div><span>Role</span><strong>{{ selectedGraphNode.node.role }}</strong></div>
           </template>
           <template v-if="selectedGraphNode.kind === 'task'">
@@ -724,7 +733,10 @@ export default defineComponent({
                   <span class="mono file-id">{{ file.fileId }}</span>
                   <span>{{ file.level }}</span>
                   <span>{{ formatBytes(file.sizeBytes) }}</span>
-                  <span class="mono">{{ fileTimeRange(file) }}</span>
+                  <span class="file-time-range mono">
+                    <span class="time-range-line"><span class="time-range-label">Start</span><span>{{ fileTimeStart(file) }}</span></span>
+                    <span class="time-range-line"><span class="time-range-label">End</span><span>{{ fileTimeEnd(file) }}</span></span>
+                  </span>
                 </div>
               </div>
               <div class="file-list">
@@ -739,7 +751,10 @@ export default defineComponent({
                   <span class="mono file-id">{{ file.fileId }}</span>
                   <span>{{ file.level }}</span>
                   <span>{{ formatBytes(file.sizeBytes) }}</span>
-                  <span class="mono">{{ fileTimeRange(file) }}</span>
+                  <span class="file-time-range mono">
+                    <span class="time-range-line"><span class="time-range-label">Start</span><span>{{ fileTimeStart(file) }}</span></span>
+                    <span class="time-range-line"><span class="time-range-label">End</span><span>{{ fileTimeEnd(file) }}</span></span>
+                  </span>
                 </div>
               </div>
             </div>
@@ -1329,6 +1344,26 @@ export default defineComponent({
 .file-id {
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.file-time-range {
+  display: inline-grid;
+  gap: 3px;
+}
+
+.time-range-line {
+  display: grid;
+  grid-template-columns: 38px 1fr;
+  gap: 8px;
+  align-items: baseline;
+}
+
+.time-range-label {
+  color: #93c5fd;
+  font-family: var(--font-sans);
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
 }
 
 .mono {
