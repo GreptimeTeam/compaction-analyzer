@@ -1,5 +1,5 @@
 <script lang="ts">
-import { computed, defineComponent, ref, type PropType } from 'vue'
+import { computed, defineComponent, onBeforeUnmount, onMounted, ref, type PropType } from 'vue'
 import { formatBytes, formatDuration } from '../visualization'
 import { getMergeTimeSeverity, sortCompactionProcessFiles, sortCompactionProcessTasks, type CompactionProcessAnalysis, type CompactionProcessFile, type CompactionProcessFileSortKey, type CompactionProcessSortKey, type CompactionProcessTask, type SortDirection } from '../parser'
 
@@ -39,6 +39,13 @@ interface GraphLink {
   toRadius: number
   kind: 'input' | 'output'
 }
+type SelectedGraphNode = { kind: 'file'; node: GraphFileNode } | { kind: 'task'; node: GraphTaskNode }
+interface GraphMinimapViewport {
+  x: number
+  y: number
+  width: number
+  height: number
+}
 
 export default defineComponent({
   name: 'CompactionProcessPanel',
@@ -57,10 +64,32 @@ export default defineComponent({
     const outputFileSortKey = ref<CompactionProcessFileSortKey>('time-range')
     const outputFileSortDirection = ref<SortDirection>('asc')
     const expandedTaskKey = ref<string | null>(null)
+    const graphScale = ref(1)
+    const graphPan = ref({ x: 0, y: 0 })
+    const graphDrag = ref<{ pointerId: number; startX: number; startY: number; panX: number; panY: number } | null>(null)
+    const graphDidDrag = ref(false)
+    const graphDragThreshold = 4
+    const selectedGraphNode = ref<SelectedGraphNode | null>(null)
+    const pendingGraphSelection = ref<SelectedGraphNode | null>(null)
+    const graphSvgRef = ref<SVGSVGElement | null>(null)
+    const graphCanvasRef = ref<HTMLElement | null>(null)
+    const graphViewportRevision = ref(0)
 
     const sortedTasks = computed(() => sortCompactionProcessTasks(props.analysis.tasks, sortKey.value, sortDirection.value))
     const graphTasks = computed(() => sortCompactionProcessTasks(props.analysis.tasks, 'time', 'asc'))
     const graphHeight = computed(() => Math.max(360, graphTasks.value.length * 150 + 80))
+    const graphTransform = computed(() => `translate(${graphPan.value.x} ${graphPan.value.y}) scale(${graphScale.value})`)
+    const isGraphDragging = computed(() => graphDrag.value !== null)
+    const showGraphMinimap = computed(() => graphScale.value > 1.05)
+    const selectedGraphPopoverStyle = computed(() => {
+      graphViewportRevision.value
+      if (!selectedGraphNode.value) return {}
+      const point = graphCssPoint(selectedGraphNode.value.node.x, selectedGraphNode.value.node.y)
+      return {
+        left: `${point.x + 12}px`,
+        top: `${point.y + 12}px`,
+      }
+    })
     const maxFileSize = computed(() => {
       const sizes = props.analysis.tasks.flatMap(task => [...task.inputFiles, ...task.outputFiles].map(file => file.sizeBytes))
       return Math.max(1, ...sizes)
@@ -71,9 +100,9 @@ export default defineComponent({
       const graphLinks: GraphLink[] = []
       const rowByFileId = new Map<string, number>()
       const rowByTaskId = new Map<string, number>()
-      const rowGap = 76
-      const fileColumnGap = 290
-      const taskColumnGap = 290
+      const rowGap = 56
+      const fileColumnGap = 230
+      const taskColumnGap = 230
       let nextRow = 0
 
       function rowForFile(fileId: string): number {
@@ -143,9 +172,41 @@ export default defineComponent({
       })
 
       const fileNodes = [...fileNodeById.values()]
-      const width = Math.max(1100, ...fileNodes.map(node => node.x + 220), ...taskNodes.map(node => node.x + 180))
+      const width = Math.max(900, ...fileNodes.map(node => node.x + 220), ...taskNodes.map(node => node.x + 180))
       const height = Math.max(360, ...fileNodes.map(node => node.y + 120), ...taskNodes.map(node => node.y + 120))
       return { fileNodeById, fileNodes, taskNodes, graphLinks, width, height }
+    })
+    const graphMinimapViewport = computed<GraphMinimapViewport>(() => {
+      graphViewportRevision.value
+      const layout = graphLayout.value
+      const svg = graphSvgRef.value
+      const canvas = graphCanvasRef.value
+      const fallbackWidth = layout.width / graphScale.value
+      const fallbackHeight = layout.height / graphScale.value
+      const visibleWidth = svg && canvas ? (canvas.clientWidth / svg.getBoundingClientRect().width) * layout.width / graphScale.value : fallbackWidth
+      const visibleHeight = svg && canvas ? (canvas.clientHeight / svg.getBoundingClientRect().height) * layout.height / graphScale.value : fallbackHeight
+      const visibleX = svg && canvas ? (canvas.scrollLeft / svg.getBoundingClientRect().width) * layout.width : 0
+      const visibleY = svg && canvas ? (canvas.scrollTop / svg.getBoundingClientRect().height) * layout.height : 0
+      const width = Math.min(layout.width, visibleWidth)
+      const height = Math.min(layout.height, visibleHeight)
+      return {
+        x: Math.min(Math.max(0, (visibleX - graphPan.value.x) / graphScale.value), Math.max(0, layout.width - width)),
+        y: Math.min(Math.max(0, (visibleY - graphPan.value.y) / graphScale.value), Math.max(0, layout.height - height)),
+        width,
+        height,
+      }
+    })
+
+    function refreshGraphViewport() {
+      graphViewportRevision.value += 1
+    }
+
+    onMounted(() => {
+      window.addEventListener('resize', refreshGraphViewport)
+    })
+
+    onBeforeUnmount(() => {
+      window.removeEventListener('resize', refreshGraphViewport)
     })
     const lineageLinks = computed<LineageLink[]>(() => {
       const latestOutputByFileId = new Map<string, LineageNodeRef>()
@@ -265,7 +326,11 @@ export default defineComponent({
     }
 
     function graphFileLabel(file: CompactionProcessFile): string {
-      return `${file.fileId.slice(0, 8)} · L${file.level} · ${formatBytes(file.sizeBytes)}`
+      return `${file.fileId} · L${file.level} · ${formatBytes(file.sizeBytes)}`
+    }
+
+    function graphFileShortLabel(file: CompactionProcessFile): string {
+      return `${file.fileId.slice(0, 8)}...${file.fileId.slice(-4)}`
     }
 
     function lineagePath(link: LineageLink): string {
@@ -297,7 +362,108 @@ export default defineComponent({
       return `graph-file-node ${node.role}`
     }
 
-    return { activeTab, expandedTaskKey, fileNodeClass, fileNodeRadius, fileNodeX, fileNodeY, fileSortMark, fileTimeRange, formatBytes, formatDuration, formatNum, formatMaybeDuration, graphFileLabel, graphFileNodeClass, graphHeight, graphLayout, graphLinkPath, graphRowY, graphTasks, lineageLinks, lineagePath, mergeTimeClass, setFileSort, setSort, sortedFiles, sortedTasks, sortMark, taskKey, taskNodeX, taskTime, toggleTask }
+    function selectGraphFile(node: GraphFileNode) {
+      selectedGraphNode.value = { kind: 'file', node }
+    }
+
+    function selectGraphTask(node: GraphTaskNode) {
+      selectedGraphNode.value = { kind: 'task', node }
+    }
+
+    function prepareGraphFileSelection(node: GraphFileNode) {
+      pendingGraphSelection.value = { kind: 'file', node }
+    }
+
+    function prepareGraphTaskSelection(node: GraphTaskNode) {
+      pendingGraphSelection.value = { kind: 'task', node }
+    }
+
+    function clearGraphSelection() {
+      selectedGraphNode.value = null
+    }
+
+    function graphCssPoint(x: number, y: number): { x: number; y: number } {
+      const svg = graphSvgRef.value
+      const canvas = graphCanvasRef.value
+      if (!svg || !canvas) return { x: graphPan.value.x + x * graphScale.value, y: graphPan.value.y + y * graphScale.value }
+      const svgRect = svg.getBoundingClientRect()
+      const canvasRect = canvas.getBoundingClientRect()
+      const graphRenderedScale = {
+        x: svgRect.width / graphLayout.value.width,
+        y: svgRect.height / graphLayout.value.height,
+      }
+      return {
+        x: canvas.scrollLeft + svgRect.left - canvasRect.left + (graphPan.value.x + x * graphScale.value) * graphRenderedScale.x,
+        y: canvas.scrollTop + svgRect.top - canvasRect.top + (graphPan.value.y + y * graphScale.value) * graphRenderedScale.y,
+      }
+    }
+
+    function graphClientPoint(event: MouseEvent | PointerEvent): { x: number; y: number } {
+      const rect = (event.currentTarget as SVGSVGElement).getBoundingClientRect()
+      return {
+        x: (event.clientX - rect.left) * (graphLayout.value.width / rect.width),
+        y: (event.clientY - rect.top) * (graphLayout.value.height / rect.height),
+      }
+    }
+
+    function handleGraphWheel(event: WheelEvent) {
+      const previousScale = graphScale.value
+      const nextScale = Math.min(3, Math.max(0.5, previousScale + (event.deltaY < 0 ? 0.1 : -0.1)))
+      const cursor = graphClientPoint(event)
+      const graphPointBeforeZoom = {
+        x: (cursor.x - graphPan.value.x) / previousScale,
+        y: (cursor.y - graphPan.value.y) / previousScale,
+      }
+      graphScale.value = nextScale
+      graphPan.value = {
+        x: cursor.x - graphPointBeforeZoom.x * nextScale,
+        y: cursor.y - graphPointBeforeZoom.y * nextScale,
+      }
+    }
+
+    function handleGraphPointerDown(event: PointerEvent) {
+      const point = graphClientPoint(event)
+      graphDrag.value = { pointerId: event.pointerId, startX: point.x, startY: point.y, panX: graphPan.value.x, panY: graphPan.value.y }
+      graphDidDrag.value = false
+      ;(event.currentTarget as SVGSVGElement).setPointerCapture(event.pointerId)
+    }
+
+    function handleGraphPointerMove(event: PointerEvent) {
+      if (!graphDrag.value || graphDrag.value.pointerId !== event.pointerId) return
+      const point = graphClientPoint(event)
+      const dx = point.x - graphDrag.value.startX
+      const dy = point.y - graphDrag.value.startY
+      if (Math.hypot(dx, dy) > graphDragThreshold) graphDidDrag.value = true
+      graphPan.value = {
+        x: graphDrag.value.panX + dx,
+        y: graphDrag.value.panY + dy,
+      }
+    }
+
+    function handleGraphPointerUp(event: PointerEvent) {
+      if (graphDrag.value?.pointerId !== event.pointerId) return
+      if (!graphDidDrag.value && pendingGraphSelection.value) {
+        selectedGraphNode.value = pendingGraphSelection.value
+      } else if (!graphDidDrag.value) {
+        clearGraphSelection()
+      }
+      pendingGraphSelection.value = null
+      graphDrag.value = null
+      const svg = event.currentTarget as SVGSVGElement
+      if (svg.hasPointerCapture(event.pointerId)) svg.releasePointerCapture(event.pointerId)
+      requestAnimationFrame(() => {
+        graphDidDrag.value = false
+      })
+    }
+
+    function handleGraphPointerCancel(event: PointerEvent) {
+      if (graphDrag.value?.pointerId !== event.pointerId) return
+      pendingGraphSelection.value = null
+      graphDrag.value = null
+      graphDidDrag.value = false
+    }
+
+    return { activeTab, clearGraphSelection, expandedTaskKey, fileNodeClass, fileNodeRadius, fileNodeX, fileNodeY, fileSortMark, fileTimeRange, formatBytes, formatDuration, formatNum, formatMaybeDuration, graphCanvasRef, graphFileLabel, graphFileShortLabel, graphFileNodeClass, graphHeight, graphLayout, graphLinkPath, graphMinimapViewport, graphRowY, graphScale, graphPan, graphSvgRef, graphTasks, graphTransform, handleGraphPointerCancel, handleGraphPointerDown, handleGraphPointerMove, handleGraphPointerUp, handleGraphWheel, isGraphDragging, lineageLinks, lineagePath, mergeTimeClass, prepareGraphFileSelection, prepareGraphTaskSelection, refreshGraphViewport, selectedGraphNode, selectedGraphPopoverStyle, selectGraphFile, selectGraphTask, setFileSort, setSort, showGraphMinimap, sortedFiles, sortedTasks, sortMark, taskKey, taskNodeX, taskTime, toggleTask }
   },
 })
 </script>
@@ -369,31 +535,59 @@ export default defineComponent({
           <span><i class="legend-line lineage"></i>Continued input</span>
         </div>
       </div>
-      <div class="graph-canvas">
-        <svg :viewBox="`0 0 ${graphLayout.width} ${graphLayout.height}`" role="img" aria-label="Compaction input output relationship graph">
+      <div ref="graphCanvasRef" :class="['graph-canvas', { dragging: isGraphDragging }]" @scroll="refreshGraphViewport">
+        <svg ref="graphSvgRef" :viewBox="`0 0 ${graphLayout.width} ${graphLayout.height}`" role="img" aria-label="Compaction input output relationship graph" @wheel.prevent="handleGraphWheel" @pointerdown="handleGraphPointerDown" @pointermove="handleGraphPointerMove" @pointerup="handleGraphPointerUp" @pointercancel="handleGraphPointerCancel" @lostpointercapture="handleGraphPointerCancel">
           <defs>
             <marker id="arrow-head" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
               <path d="M0,0 L0,6 L9,3 z" class="arrow-head" />
             </marker>
           </defs>
-          <path v-for="link in graphLayout.graphLinks" :key="link.id" :d="graphLinkPath(link)" :class="['graph-link', link.kind === 'input' ? 'input-link' : 'output-link']" marker-end="url(#arrow-head)">
-            <title>{{ link.kind === 'input' ? 'Input file feeds task' : 'Task produces output file' }}</title>
-          </path>
-          <g v-for="node in graphLayout.fileNodes" :key="node.id">
-            <circle :class="graphFileNodeClass(node)" :cx="node.x" :cy="node.y" :r="fileNodeRadius(node.file.sizeBytes)">
-              <title>{{ graphFileLabel(node.file) }}</title>
-            </circle>
-            <text :x="node.x" :y="node.y + fileNodeRadius(node.file.sizeBytes) + 16" class="graph-file-label" text-anchor="middle">{{ graphFileLabel(node.file) }}</text>
-          </g>
-          <g v-for="node in graphLayout.taskNodes" :key="node.id">
-            <circle class="graph-task-node" :cx="node.x" :cy="node.y" r="24">
-              <title>{{ node.task.inputFileCount }} input files compacted into {{ node.task.outputFileCount }} output files</title>
-            </circle>
-            <text :x="node.x" :y="node.y + 5" class="graph-task-label" text-anchor="middle">{{ node.task.outputFileCount }}</text>
-            <text :x="node.x" :y="node.y + 42" class="graph-region" text-anchor="middle">R{{ node.task.regionId }}</text>
+          <g :transform="graphTransform">
+            <path v-for="link in graphLayout.graphLinks" :key="link.id" :d="graphLinkPath(link)" :class="['graph-link', link.kind === 'input' ? 'input-link' : 'output-link']" marker-end="url(#arrow-head)">
+              <title>{{ link.kind === 'input' ? 'Input file feeds task' : 'Task produces output file' }}</title>
+            </path>
+            <g v-for="node in graphLayout.fileNodes" :key="node.id" role="button" tabindex="0" :aria-label="`File ${node.file.fileId}`" @pointerdown="prepareGraphFileSelection(node)" @click.stop @keydown.enter.stop.prevent="selectGraphFile(node)" @keydown.space.stop.prevent="selectGraphFile(node)">
+              <circle :class="graphFileNodeClass(node)" :cx="node.x" :cy="node.y" :r="fileNodeRadius(node.file.sizeBytes)">
+                <title>{{ graphFileLabel(node.file) }}</title>
+              </circle>
+              <text :x="node.x" :y="node.y + fileNodeRadius(node.file.sizeBytes) + 16" class="graph-file-label" text-anchor="middle">{{ graphFileShortLabel(node.file) }}</text>
+            </g>
+            <g v-for="node in graphLayout.taskNodes" :key="node.id" role="button" tabindex="0" :aria-label="`Task ${taskTime(node.task)}`" @pointerdown="prepareGraphTaskSelection(node)" @click.stop @keydown.enter.stop.prevent="selectGraphTask(node)" @keydown.space.stop.prevent="selectGraphTask(node)">
+              <circle class="graph-task-node" :cx="node.x" :cy="node.y" r="24">
+                <title>{{ node.task.inputFileCount }} input files compacted into {{ node.task.outputFileCount }} output files</title>
+              </circle>
+              <text :x="node.x" :y="node.y + 5" class="graph-task-label" text-anchor="middle" textLength="38" lengthAdjust="spacingAndGlyphs">{{ formatMaybeDuration(node.task.mergeMillis) }}</text>
+              <text :x="node.x" :y="node.y + 42" class="graph-region" text-anchor="middle">R{{ node.task.regionId }}</text>
+            </g>
           </g>
         </svg>
+        <div v-if="selectedGraphNode" class="graph-popover" :style="selectedGraphPopoverStyle">
+          <template v-if="selectedGraphNode.kind === 'file'">
+            <h4>File {{ selectedGraphNode.node.file.fileId }}</h4>
+            <div><span>Level</span><strong>{{ selectedGraphNode.node.file.level }}</strong></div>
+            <div><span>Size</span><strong>{{ formatBytes(selectedGraphNode.node.file.sizeBytes) }}</strong></div>
+            <div><span>Time range</span><strong>{{ fileTimeRange(selectedGraphNode.node.file) }}</strong></div>
+            <div><span>Role</span><strong>{{ selectedGraphNode.node.role }}</strong></div>
+          </template>
+          <template v-if="selectedGraphNode.kind === 'task'">
+            <h4>Task {{ taskTime(selectedGraphNode.node.task) }}</h4>
+            <div><span>Region / table</span><strong>{{ selectedGraphNode.node.task.regionId }} / {{ selectedGraphNode.node.task.tableId }}</strong></div>
+            <div><span>Input count</span><strong>{{ formatNum(selectedGraphNode.node.task.inputFileCount) }}</strong></div>
+            <div><span>Output count</span><strong>{{ formatNum(selectedGraphNode.node.task.outputFileCount) }}</strong></div>
+            <div><span>Input size</span><strong>{{ formatBytes(selectedGraphNode.node.task.inputBytes) }}</strong></div>
+            <div><span>Output size</span><strong>{{ formatBytes(selectedGraphNode.node.task.outputBytes) }}</strong></div>
+            <div><span>Merge time</span><strong>{{ formatMaybeDuration(selectedGraphNode.node.task.mergeMillis) }}</strong></div>
+            <div><span>Pick time</span><strong>{{ formatMaybeDuration(selectedGraphNode.node.task.pickMillis) }}</strong></div>
+            <div><span>Fan-out</span><strong>{{ formatNum(selectedGraphNode.node.task.fanOut) }}</strong></div>
+          </template>
+        </div>
       </div>
+      <svg v-if="showGraphMinimap" class="graph-minimap" :viewBox="`0 0 ${graphLayout.width} ${graphLayout.height}`" aria-hidden="true">
+        <path v-for="link in graphLayout.graphLinks" :key="`minimap-${link.id}`" :d="graphLinkPath(link)" class="graph-minimap-link" />
+        <circle v-for="node in graphLayout.fileNodes" :key="`minimap-file-${node.id}`" :class="['graph-minimap-file', node.role]" :cx="node.x" :cy="node.y" r="10" />
+        <rect v-for="node in graphLayout.taskNodes" :key="`minimap-task-${node.id}`" class="graph-minimap-task" :x="node.x - 14" :y="node.y - 14" width="28" height="28" rx="6" />
+        <rect class="graph-minimap-viewport" :x="graphMinimapViewport.x" :y="graphMinimapViewport.y" :width="graphMinimapViewport.width" :height="graphMinimapViewport.height" />
+      </svg>
     </section>
 
     <section v-if="activeTab === 'table'" class="task-table-wrap">
@@ -590,6 +784,10 @@ export default defineComponent({
 }
 
 .graph-wrap {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100vh - 120px);
   border: 1px solid rgba(74, 144, 226, 0.28);
   border-radius: 14px;
   background: radial-gradient(circle at 20% 0%, rgba(74, 144, 226, 0.16), transparent 34%), var(--bg-surface);
@@ -646,6 +844,9 @@ export default defineComponent({
 }
 
 .graph-canvas {
+  position: relative;
+  flex: 1;
+  min-height: 0;
   overflow: auto;
   padding: 12px;
 }
@@ -653,6 +854,58 @@ export default defineComponent({
 .graph-canvas svg {
   min-width: 1080px;
   width: 100%;
+  cursor: grab;
+}
+
+.graph-canvas.dragging svg {
+  cursor: grabbing;
+}
+
+.graph-minimap {
+  position: absolute;
+  right: 18px;
+  bottom: 18px;
+  z-index: 1;
+  width: 180px;
+  height: 118px;
+  min-width: 0;
+  border: 1px solid rgba(148, 163, 184, 0.42);
+  border-radius: 10px;
+  background: rgba(15, 23, 42, 0.82);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.34);
+  pointer-events: none;
+}
+
+.graph-minimap-link {
+  fill: none;
+  stroke: rgba(148, 163, 184, 0.42);
+  stroke-width: 8;
+}
+
+.graph-minimap-file {
+  stroke-width: 4;
+}
+
+.graph-minimap-file.input {
+  fill: rgba(96, 165, 250, 0.72);
+}
+
+.graph-minimap-file.output {
+  fill: rgba(52, 211, 153, 0.72);
+}
+
+.graph-minimap-file.intermediate {
+  fill: rgba(250, 204, 21, 0.72);
+}
+
+.graph-minimap-task {
+  fill: rgba(192, 132, 252, 0.72);
+}
+
+.graph-minimap-viewport {
+  fill: rgba(255, 255, 255, 0.08);
+  stroke: rgba(255, 255, 255, 0.86);
+  stroke-width: 8;
 }
 
 .graph-row-line {
@@ -683,6 +936,7 @@ export default defineComponent({
 }
 
 .graph-file-node {
+  cursor: pointer;
   stroke-width: 2;
   filter: drop-shadow(0 6px 14px rgba(0, 0, 0, 0.35));
 }
@@ -703,9 +957,50 @@ export default defineComponent({
 }
 
 .graph-task-node {
+  cursor: pointer;
   fill: rgba(192, 132, 252, 0.22);
   stroke: #c084fc;
   stroke-width: 2;
+}
+
+.graph-popover {
+  position: absolute;
+  z-index: 2;
+  min-width: 230px;
+  max-width: 320px;
+  padding: 12px;
+  border: 1px solid rgba(148, 163, 184, 0.38);
+  border-radius: 12px;
+  background: rgba(15, 23, 42, 0.96);
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.45);
+  color: var(--text-secondary);
+  font-size: 11px;
+  pointer-events: none;
+}
+
+.graph-popover h4 {
+  overflow: hidden;
+  margin-bottom: 8px;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.graph-popover div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 4px 0;
+  border-top: 1px solid rgba(148, 163, 184, 0.12);
+}
+
+.graph-popover strong {
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-weight: 700;
+  text-align: right;
 }
 
 .graph-task-label,
@@ -718,7 +1013,7 @@ export default defineComponent({
 
 .graph-task-label {
   fill: #f5d0fe;
-  font-size: 12px;
+  font-size: 9px;
   font-weight: 800;
 }
 
