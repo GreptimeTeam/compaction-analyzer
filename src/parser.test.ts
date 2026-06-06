@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { analyzeCompactionProcessTasks, analyzeCompactionProcesses, getMergeTimeSeverity, sortCompactionProcessFiles, sortCompactionProcessTasks } from './parser'
+import { analyzeCompactionProcessTasks, analyzeCompactionProcesses, getMergeTimeSeverity, parseLogCsv, sortCompactionProcessFiles, sortCompactionProcessTasks } from './parser'
 
 describe('analyzeCompactionProcesses', () => {
   it('summarizes compaction tasks from raw log text', () => {
@@ -49,6 +49,34 @@ describe('analyzeCompactionProcesses', () => {
       new Date('2026-01-09T13:29:42.016Z').getTime(),
       new Date('2026-01-09T13:33:42.361Z').getTime(),
     ])
+  })
+
+  it('summarizes compaction tasks from GreptimeDB JSON log lines', () => {
+    const message = 'Compacted SST files, region_id: 4866197946368(1133, 0), input: [FileMeta { region_id: 4866197946368(1133, 0), file_id: 30780311-45ed-4d9a-b394-edb71dbd7ad4 , time_range: (2026-06-04 16:12:12.670078755+0000, 2026-06-04 16:45:09.162246818+0000) , level: 0, file_size: 119.0KiB }, FileMeta { region_id: 4866197946368(1133, 0), file_id: e3855a46-448a-4cee-b547-16d553aac2b3 , time_range: (2026-06-04 16:45:14.162322209+0000, 2026-06-04 17:16:09.162523305+0000) , level: 0, file_size: 119.2KiB }], output: [FileMeta { region_id: 4866197946368(1133, 0), file_id: e06c9283-d968-4c8c-a9e7-6f2a1cc895f0 , time_range: (2026-06-04 16:12:12.670078755+0000, 2026-06-04 17:16:09.162523305+0000) , level: 1, file_size: 235.0KiB }], window: Some(43200), waiter_num: 0, merge_time: 4.028134509s'
+    const log = JSON.stringify({
+      timestamp: '2026-06-04T18:16:13.833807Z',
+      level: 'INFO',
+      fields: { message },
+      target: 'mito2::compaction::task',
+    })
+
+    const result = analyzeCompactionProcesses(log)
+
+    expect(result.totalTasks).toBe(1)
+    expect(result.totalInputFiles).toBe(2)
+    expect(result.totalOutputFiles).toBe(1)
+    expect(result.totalInputBytes).toBe(243917)
+    expect(result.totalOutputBytes).toBe(240640)
+    expect(result.averageMergeMillis).toBeCloseTo(4028.134509)
+    expect(result.tasks[0]).toMatchObject({
+      timestamp: new Date('2026-06-04T18:16:13.833807Z').getTime(),
+      regionId: 4866197946368,
+      tableId: 1133,
+      inputFileCount: 2,
+      outputFileCount: 1,
+      fanOut: 2,
+      pickMillis: null,
+    })
   })
 
   it('summarizes a region-filtered task list', () => {
@@ -137,6 +165,36 @@ describe('analyzeCompactionProcesses', () => {
     expect(sortCompactionProcessFiles(files, 'size', 'desc').map(file => file.sizeBytes)).toEqual([300, 200, 100])
     expect(sortCompactionProcessFiles(files, 'time-range', 'desc').map(file => file.timeRange[0])).toEqual([30, 20, 10])
     expect(sortCompactionProcessFiles(files, 'file-id', 'asc')).not.toBe(files)
+  })
+})
+
+describe('parseLogCsv', () => {
+  it('tracks alive files from GreptimeDB JSON log lines', () => {
+    const flushedFile = '30780311-45ed-4d9a-b394-edb71dbd7ad4'
+    const compactedFile = 'e06c9283-d968-4c8c-a9e7-6f2a1cc895f0'
+    const flushMessage = `Successfully flush memtables, region: 4866197946368(1133, 0), reason: Periodically, files: [FileId(${flushedFile})], series count: 381, total_rows: 5493`
+    const regionEditMessage = `Applying RegionEdit { files_to_add: [FileMeta { region_id: 4866197946368(1133, 0), file_id: ${flushedFile} , time_range: (2026-06-04 16:12:12.670078755+0000, 2026-06-04 16:45:09.162246818+0000) , level: 0, file_size: 119.0KiB }], files_to_remove: [], timestamp_ms: Some(1780591509920) } to region 4866197946368(1133, 0), is_staging: false`
+    const compactionMessage = `Compacted SST files, region_id: 4866197946368(1133, 0), input: [FileMeta { region_id: 4866197946368(1133, 0), file_id: ${flushedFile} , time_range: (2026-06-04 16:12:12.670078755+0000, 2026-06-04 16:45:09.162246818+0000) , level: 0, file_size: 119.0KiB }], output: [FileMeta { region_id: 4866197946368(1133, 0), file_id: ${compactedFile} , time_range: (2026-06-04 16:12:12.670078755+0000, 2026-06-04 16:45:09.162246818+0000) , level: 1, file_size: 116.0KiB }], window: None, merge_time: 4s`
+    const log = [
+      JSON.stringify({ timestamp: '2026-06-04T16:45:09.920444Z', fields: { message: flushMessage }, target: 'mito2::flush' }),
+      JSON.stringify({ timestamp: '2026-06-04T16:45:09.920487Z', fields: { message: regionEditMessage }, target: 'mito2::flush' }),
+      JSON.stringify({ timestamp: '2026-06-04T18:16:13.833807Z', fields: { message: compactionMessage }, target: 'mito2::compaction::task' }),
+    ].join('\n')
+
+    const result = parseLogCsv(log)
+
+    expect(result.aliveFiles).toHaveLength(1)
+    expect(result.aliveFiles[0]).toMatchObject({
+      fileId: compactedFile,
+      regionId: 4866197946368,
+      tableId: 1133,
+      source: 'compaction',
+      sizeBytes: 118784,
+      timeRange: [
+        new Date('2026-06-04T16:12:12.670Z').getTime(),
+        new Date('2026-06-04T16:45:09.162Z').getTime(),
+      ],
+    })
   })
 })
 

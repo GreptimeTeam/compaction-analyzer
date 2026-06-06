@@ -333,6 +333,9 @@ body {
   align-items: flex-start;
   padding-top: 60px;
   flex: 1;
+  width: max(33.333vw, 600px);
+  max-width: 100%;
+  margin: 0 auto;
 }
 
 .analysis-section {

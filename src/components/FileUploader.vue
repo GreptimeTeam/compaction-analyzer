@@ -107,6 +107,24 @@ export default defineComponent({
       {{ inputModes.find(m => m.value === inputMode)?.desc }}
     </p>
 
+    <section class="format-guide" aria-label="Accepted file formats">
+      <div class="format-guide-header">
+        <span class="format-kicker">Accepted file formats</span>
+        <span class="format-note">Log modes accept plain text or JSON-lines</span>
+      </div>
+      <div class="format-examples">
+        <div class="format-card">
+          <div class="format-title">Plain log line</div>
+          <code>2026-06-04T18:16:13.833807Z INFO mito2::compaction::task: Compacted SST files, region_id: 4866197946368(1133, 0), input: [...], output: [...], merge_time: 4.028s</code>
+        </div>
+        <div class="format-card">
+          <div class="format-title">JSON log line</div>
+          <code>{&quot;timestamp&quot;:&quot;2026-06-04T18:16:13.833807Z&quot;,&quot;level&quot;:&quot;INFO&quot;,&quot;fields&quot;:{&quot;message&quot;:&quot;Compacted SST files, region_id: 4866197946368(1133, 0), input: [...], output: [...]&quot;},&quot;target&quot;:&quot;mito2::compaction::task&quot;}</code>
+          <span class="format-hint">The parser reads the log body from <code>fields.message</code>.</span>
+        </div>
+      </div>
+    </section>
+
     <div class="input-method-toggle">
       <button
         :class="['method-btn', { active: inputMethod === 'upload' }]"
@@ -209,6 +227,79 @@ export default defineComponent({
   color: var(--text-secondary);
   font-size: 13px;
   margin-bottom: 16px;
+}
+
+.format-guide {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: linear-gradient(135deg, var(--bg) 0%, var(--bg-hover) 100%);
+  padding: 14px;
+  margin-bottom: 16px;
+}
+
+.format-guide-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.format-kicker {
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.format-note {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.format-examples {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.format-card {
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel-bg);
+}
+
+.format-title {
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+
+.format-card code {
+  display: block;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.45;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.format-hint {
+  display: block;
+  color: var(--text-muted);
+  font-size: 11px;
+  margin-top: 8px;
+}
+
+.format-hint code {
+  display: inline;
+  color: var(--primary);
+  white-space: normal;
 }
 
 .input-method-toggle {
@@ -364,5 +455,21 @@ export default defineComponent({
 .analyze-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+@media (max-width: 720px) {
+  .format-guide-header,
+  .format-examples {
+    display: block;
+  }
+
+  .format-note {
+    display: block;
+    margin-top: 4px;
+  }
+
+  .format-card:not(:last-child) {
+    margin-bottom: 10px;
+  }
 }
 </style>

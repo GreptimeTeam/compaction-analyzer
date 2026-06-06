@@ -208,7 +208,7 @@ function parseDatetime(value: string): number | null {
 // ── Compaction log parser ──
 
 export function parseLogCsv(log: string): ParseResult {
-  const lines = log.split('\n').filter(l => l.trim())
+  const lines = normalizeLogLines(log)
   const aliveMap = new Map<string, AliveFile>()
 
   for (const line of lines) {
@@ -227,8 +227,7 @@ export function parseLogCsv(log: string): ParseResult {
 }
 
 export function analyzeCompactionProcesses(log: string): CompactionProcessAnalysis {
-  const tasks = log
-    .split('\n')
+  const tasks = normalizeLogLines(log)
     .map(parseCompactionProcessLine)
     .filter((task): task is CompactionProcessTask => task !== null)
 
@@ -355,6 +354,35 @@ function parseCompactionProcessLine(line: string): CompactionProcessTask | null 
 }
 
 type FileStats = CompactionProcessFile
+
+function normalizeLogLines(log: string): string[] {
+  return log
+    .split('\n')
+    .map(normalizeLogLine)
+    .filter(l => l.trim())
+}
+
+function normalizeLogLine(line: string): string {
+  const trimmed = line.trim()
+  if (!trimmed.startsWith('{')) return line
+
+  try {
+    const entry = JSON.parse(trimmed)
+    const timestamp = typeof entry.timestamp === 'string' ? entry.timestamp : null
+    const message = typeof entry.fields?.message === 'string'
+      ? entry.fields.message
+      : typeof entry.message === 'string'
+        ? entry.message
+        : null
+    if (!timestamp || !message) return line
+
+    const level = typeof entry.level === 'string' ? `${entry.level} ` : ''
+    const target = typeof entry.target === 'string' ? `${entry.target}: ` : ''
+    return `${timestamp} ${level}${target}${message}`
+  } catch {
+    return line
+  }
+}
 
 function parseCompactionLine(line: string, alive: Map<string, AliveFile>): void {
   const timestamp = extractTimestamp(line)
