@@ -3,6 +3,41 @@ import { computed, defineComponent, ref, type PropType } from 'vue'
 import { formatBytes, formatDuration } from '../visualization'
 import { getMergeTimeSeverity, sortCompactionProcessFiles, sortCompactionProcessTasks, type CompactionProcessAnalysis, type CompactionProcessFile, type CompactionProcessFileSortKey, type CompactionProcessSortKey, type CompactionProcessTask, type SortDirection } from '../parser'
 
+type ProcessTab = 'table' | 'visualization'
+type GraphFileKind = 'input' | 'output'
+interface LineageNodeRef {
+  taskIndex: number
+  fileIndex: number
+  fileCount: number
+  file: CompactionProcessFile
+}
+interface LineageLink {
+  fileId: string
+  from: LineageNodeRef
+  to: LineageNodeRef
+}
+interface GraphFileNode {
+  id: string
+  file: CompactionProcessFile
+  x: number
+  y: number
+  role: GraphFileKind | 'intermediate'
+}
+interface GraphTaskNode {
+  id: string
+  task: CompactionProcessTask
+  x: number
+  y: number
+}
+interface GraphLink {
+  id: string
+  fromX: number
+  fromY: number
+  toX: number
+  toY: number
+  kind: 'input' | 'output'
+}
+
 export default defineComponent({
   name: 'CompactionProcessPanel',
   props: {
@@ -12,6 +47,7 @@ export default defineComponent({
     },
   },
   setup(props) {
+    const activeTab = ref<ProcessTab>('table')
     const sortKey = ref<CompactionProcessSortKey>('time')
     const sortDirection = ref<SortDirection>('desc')
     const inputFileSortKey = ref<CompactionProcessFileSortKey>('time-range')
@@ -21,6 +57,117 @@ export default defineComponent({
     const expandedTaskKey = ref<string | null>(null)
 
     const sortedTasks = computed(() => sortCompactionProcessTasks(props.analysis.tasks, sortKey.value, sortDirection.value))
+    const graphTasks = computed(() => sortCompactionProcessTasks(props.analysis.tasks, 'time', 'asc'))
+    const graphHeight = computed(() => Math.max(360, graphTasks.value.length * 150 + 80))
+    const maxFileSize = computed(() => {
+      const sizes = props.analysis.tasks.flatMap(task => [...task.inputFiles, ...task.outputFiles].map(file => file.sizeBytes))
+      return Math.max(1, ...sizes)
+    })
+    const graphLayout = computed(() => {
+      const fileNodeById = new Map<string, GraphFileNode>()
+      const taskNodes: GraphTaskNode[] = []
+      const graphLinks: GraphLink[] = []
+      const rowByFileId = new Map<string, number>()
+      const rowByTaskId = new Map<string, number>()
+      const rowGap = 76
+      const fileColumnGap = 290
+      const taskColumnGap = 290
+      let nextRow = 0
+
+      function rowForFile(fileId: string): number {
+        const existing = rowByFileId.get(fileId)
+        if (existing !== undefined) return existing
+        rowByFileId.set(fileId, nextRow)
+        return nextRow++
+      }
+
+      function ensureFileNode(file: CompactionProcessFile, column: number, role: GraphFileNode['role']): GraphFileNode {
+        const existing = fileNodeById.get(file.fileId)
+        const row = rowForFile(file.fileId)
+        const x = 120 + column * fileColumnGap
+        const y = 90 + row * rowGap
+        if (existing) {
+          existing.file = file
+          existing.x = Math.max(existing.x, x)
+          if (existing.role !== role) existing.role = 'intermediate'
+          return existing
+        }
+        const node = { id: file.fileId, file, x, y, role }
+        fileNodeById.set(file.fileId, node)
+        return node
+      }
+
+      graphTasks.value.forEach((task, taskIndex) => {
+        const inputDepth = task.inputFiles.reduce((max, file) => Math.max(max, Math.floor((fileNodeById.get(file.fileId)?.x ?? 120) / fileColumnGap)), 0)
+        const taskColumn = inputDepth + 1
+        const outputColumn = taskColumn + 1
+        const inputRows = task.inputFiles.map(file => rowForFile(file.fileId))
+        const fallbackRow = rowByTaskId.get(taskKey(task)) ?? nextRow++
+        const taskRow = inputRows.length > 0 ? inputRows.reduce((sum, row) => sum + row, 0) / inputRows.length : fallbackRow
+        rowByTaskId.set(taskKey(task), taskRow)
+        const taskNode = {
+          id: taskKey(task),
+          task,
+          x: 120 + taskColumn * taskColumnGap,
+          y: 90 + taskRow * rowGap,
+        }
+        taskNodes.push(taskNode)
+
+        task.inputFiles.forEach((file) => {
+          ensureFileNode(file, Math.max(0, taskColumn - 1), 'input')
+        })
+
+        task.outputFiles.forEach((file, fileIndex) => {
+          ensureFileNode(file, outputColumn, 'output')
+          if (!task.inputFiles.some(input => input.fileId === file.fileId) && !rowByFileId.has(file.fileId)) {
+            rowByFileId.set(file.fileId, Math.round(taskRow + fileIndex + 1))
+          }
+        })
+      })
+
+      graphTasks.value.forEach((task) => {
+        const taskNode = taskNodes.find(node => node.id === taskKey(task))
+        if (!taskNode) return
+        task.inputFiles.forEach((file) => {
+          const fileNode = fileNodeById.get(file.fileId)
+          if (!fileNode) return
+          graphLinks.push({ id: `in-${taskNode.id}-${file.fileId}`, fromX: fileNode.x, fromY: fileNode.y, toX: taskNode.x, toY: taskNode.y, kind: 'input' })
+        })
+        task.outputFiles.forEach((file) => {
+          const fileNode = fileNodeById.get(file.fileId)
+          if (!fileNode) return
+          graphLinks.push({ id: `out-${taskNode.id}-${file.fileId}`, fromX: taskNode.x, fromY: taskNode.y, toX: fileNode.x, toY: fileNode.y, kind: 'output' })
+        })
+      })
+
+      const fileNodes = [...fileNodeById.values()]
+      const width = Math.max(1100, ...fileNodes.map(node => node.x + 220), ...taskNodes.map(node => node.x + 180))
+      const height = Math.max(360, ...fileNodes.map(node => node.y + 120), ...taskNodes.map(node => node.y + 120))
+      return { fileNodeById, fileNodes, taskNodes, graphLinks, width, height }
+    })
+    const lineageLinks = computed<LineageLink[]>(() => {
+      const latestOutputByFileId = new Map<string, LineageNodeRef>()
+      const links: LineageLink[] = []
+
+      graphTasks.value.forEach((task, taskIndex) => {
+        task.inputFiles.forEach((file, fileIndex) => {
+          const from = latestOutputByFileId.get(file.fileId)
+          if (from) {
+            links.push({
+              fileId: file.fileId,
+              from,
+              to: { taskIndex, fileIndex, fileCount: task.inputFiles.length, file },
+            })
+          }
+        })
+
+        task.outputFiles.forEach((file, fileIndex) => {
+          latestOutputByFileId.set(file.fileId, { taskIndex, fileIndex, fileCount: task.outputFiles.length, file })
+        })
+      })
+
+      return links
+    })
 
     function setSort(key: CompactionProcessSortKey) {
       if (sortKey.value === key) {
@@ -89,7 +236,55 @@ export default defineComponent({
       return `${new Date(file.timeRange[0]).toISOString().slice(0, 19)}Z - ${new Date(file.timeRange[1]).toISOString().slice(0, 19)}Z`
     }
 
-    return { expandedTaskKey, fileSortMark, fileTimeRange, formatBytes, formatDuration, formatNum, formatMaybeDuration, mergeTimeClass, setFileSort, setSort, sortedFiles, sortedTasks, sortMark, taskKey, taskTime, toggleTask }
+    function graphRowY(taskIndex: number): number {
+      return taskIndex * 150 + 90
+    }
+
+    function fileNodeY(taskIndex: number, fileIndex: number, totalFiles: number): number {
+      const center = graphRowY(taskIndex)
+      const gap = 28
+      return center + (fileIndex - (totalFiles - 1) / 2) * gap
+    }
+
+    function fileNodeX(kind: GraphFileKind): number {
+      return kind === 'input' ? 190 : 910
+    }
+
+    function taskNodeX(): number {
+      return 550
+    }
+
+    function fileNodeRadius(sizeBytes: number): number {
+      return 7 + Math.sqrt(sizeBytes / maxFileSize.value) * 15
+    }
+
+    function fileNodeClass(kind: GraphFileKind): string {
+      return `graph-file-node ${kind}`
+    }
+
+    function graphFileLabel(file: CompactionProcessFile): string {
+      return `${file.fileId.slice(0, 8)} · L${file.level} · ${formatBytes(file.sizeBytes)}`
+    }
+
+    function lineagePath(link: LineageLink): string {
+      const startX = fileNodeX('output') + fileNodeRadius(link.from.file.sizeBytes) + 10
+      const startY = fileNodeY(link.from.taskIndex, link.from.fileIndex, link.from.fileCount)
+      const endX = fileNodeX('input') - fileNodeRadius(link.to.file.sizeBytes) - 10
+      const endY = fileNodeY(link.to.taskIndex, link.to.fileIndex, link.to.fileCount)
+      const controlOffset = Math.max(90, Math.abs(endY - startY) * 0.35)
+      return `M ${startX} ${startY} C ${startX + controlOffset} ${startY}, ${endX - controlOffset} ${endY}, ${endX} ${endY}`
+    }
+
+    function graphLinkPath(link: GraphLink): string {
+      const control = Math.max(80, Math.abs(link.toX - link.fromX) * 0.38)
+      return `M ${link.fromX} ${link.fromY} C ${link.fromX + control} ${link.fromY}, ${link.toX - control} ${link.toY}, ${link.toX} ${link.toY}`
+    }
+
+    function graphFileNodeClass(node: GraphFileNode): string {
+      return `graph-file-node ${node.role}`
+    }
+
+    return { activeTab, expandedTaskKey, fileNodeClass, fileNodeRadius, fileNodeX, fileNodeY, fileSortMark, fileTimeRange, formatBytes, formatDuration, formatNum, formatMaybeDuration, graphFileLabel, graphFileNodeClass, graphHeight, graphLayout, graphLinkPath, graphRowY, graphTasks, lineageLinks, lineagePath, mergeTimeClass, setFileSort, setSort, sortedFiles, sortedTasks, sortMark, taskKey, taskNodeX, taskTime, toggleTask }
   },
 })
 </script>
@@ -143,7 +338,52 @@ export default defineComponent({
       </div>
     </section>
 
-    <section class="task-table-wrap">
+    <div class="process-tabs" role="tablist" aria-label="Compaction process views">
+      <button :class="['process-tab', { active: activeTab === 'table' }]" @click="activeTab = 'table'">Table</button>
+      <button :class="['process-tab', { active: activeTab === 'visualization' }]" @click="activeTab = 'visualization'">Visualization</button>
+    </div>
+
+    <section v-if="activeTab === 'visualization'" class="graph-wrap">
+      <div class="graph-header">
+        <div>
+          <h3>Compaction graph</h3>
+          <p>Input files flow into each compaction task and produce output files. Circle size is scaled by file size.</p>
+        </div>
+        <div class="graph-legend">
+          <span><i class="legend-dot input"></i>Input file</span>
+          <span><i class="legend-dot output"></i>Output file</span>
+          <span><i class="legend-dot task"></i>Task</span>
+          <span><i class="legend-line lineage"></i>Continued input</span>
+        </div>
+      </div>
+      <div class="graph-canvas">
+        <svg :viewBox="`0 0 ${graphLayout.width} ${graphLayout.height}`" role="img" aria-label="Compaction input output relationship graph">
+          <defs>
+            <marker id="arrow-head" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+              <path d="M0,0 L0,6 L9,3 z" class="arrow-head" />
+            </marker>
+          </defs>
+          <path v-for="link in graphLayout.graphLinks" :key="link.id" :d="graphLinkPath(link)" :class="['graph-link', link.kind === 'input' ? 'input-link' : 'output-link']" marker-end="url(#arrow-head)">
+            <title>{{ link.kind === 'input' ? 'Input file feeds task' : 'Task produces output file' }}</title>
+          </path>
+          <g v-for="node in graphLayout.fileNodes" :key="node.id">
+            <circle :class="graphFileNodeClass(node)" :cx="node.x" :cy="node.y" :r="fileNodeRadius(node.file.sizeBytes)">
+              <title>{{ graphFileLabel(node.file) }}</title>
+            </circle>
+            <text :x="node.x" :y="node.y + fileNodeRadius(node.file.sizeBytes) + 16" class="graph-file-label" text-anchor="middle">{{ graphFileLabel(node.file) }}</text>
+          </g>
+          <g v-for="node in graphLayout.taskNodes" :key="node.id">
+            <circle class="graph-task-node" :cx="node.x" :cy="node.y" r="24">
+              <title>{{ node.task.inputFileCount }} input files compacted into {{ node.task.outputFileCount }} output files</title>
+            </circle>
+            <text :x="node.x" :y="node.y + 5" class="graph-task-label" text-anchor="middle">{{ node.task.outputFileCount }}</text>
+            <text :x="node.x" :y="node.y + 42" class="graph-region" text-anchor="middle">R{{ node.task.regionId }}</text>
+          </g>
+        </svg>
+      </div>
+    </section>
+
+    <section v-if="activeTab === 'table'" class="task-table-wrap">
       <h3>Compaction Tasks</h3>
       <div class="task-table">
         <div class="task-row header">
@@ -305,6 +545,183 @@ export default defineComponent({
   color: var(--text-muted);
   font-size: 12px;
   margin-top: 6px;
+}
+
+.process-tabs {
+  display: inline-flex;
+  gap: 4px;
+  padding: 4px;
+  margin: 0 0 16px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-surface);
+}
+
+.process-tab {
+  border: none;
+  border-radius: 999px;
+  padding: 8px 16px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  transition: all 0.2s;
+}
+
+.process-tab:hover,
+.process-tab.active {
+  background: var(--primary);
+  color: white;
+}
+
+.graph-wrap {
+  border: 1px solid rgba(74, 144, 226, 0.28);
+  border-radius: 14px;
+  background: radial-gradient(circle at 20% 0%, rgba(74, 144, 226, 0.16), transparent 34%), var(--bg-surface);
+  overflow: hidden;
+}
+
+.graph-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 16px 18px;
+  border-bottom: 1px solid var(--border);
+}
+
+.graph-header h3 {
+  font-size: 14px;
+  margin-bottom: 6px;
+}
+
+.graph-header p {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.graph-legend {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: var(--text-secondary);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.legend-dot {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  margin-right: 5px;
+  border-radius: 999px;
+  vertical-align: -1px;
+}
+
+.legend-dot.input { background: #60a5fa; }
+.legend-dot.output { background: #34d399; }
+.legend-dot.task { background: #c084fc; }
+
+.legend-line {
+  display: inline-block;
+  width: 18px;
+  height: 0;
+  margin-right: 5px;
+  border-top: 2px dashed #facc15;
+  vertical-align: 3px;
+}
+
+.graph-canvas {
+  overflow: auto;
+  padding: 12px;
+}
+
+.graph-canvas svg {
+  min-width: 1080px;
+  width: 100%;
+}
+
+.graph-row-line {
+  stroke: rgba(148, 163, 184, 0.12);
+  stroke-dasharray: 4 10;
+}
+
+.graph-link {
+  stroke-width: 1.8;
+  fill: none;
+  opacity: 0.72;
+}
+
+.input-link { stroke: #60a5fa; }
+.output-link { stroke: #34d399; }
+
+.graph-lineage-link {
+  fill: none;
+  stroke: #facc15;
+  stroke-width: 2.4;
+  stroke-dasharray: 7 6;
+  opacity: 0.86;
+  filter: drop-shadow(0 0 6px rgba(250, 204, 21, 0.25));
+}
+
+.arrow-head {
+  fill: #94a3b8;
+}
+
+.graph-file-node {
+  stroke-width: 2;
+  filter: drop-shadow(0 6px 14px rgba(0, 0, 0, 0.35));
+}
+
+.graph-file-node.input {
+  fill: rgba(96, 165, 250, 0.28);
+  stroke: #60a5fa;
+}
+
+.graph-file-node.output {
+  fill: rgba(52, 211, 153, 0.26);
+  stroke: #34d399;
+}
+
+.graph-file-node.intermediate {
+  fill: rgba(250, 204, 21, 0.24);
+  stroke: #facc15;
+}
+
+.graph-task-node {
+  fill: rgba(192, 132, 252, 0.22);
+  stroke: #c084fc;
+  stroke-width: 2;
+}
+
+.graph-task-label,
+.graph-time,
+.graph-region,
+.graph-file-label {
+  font-family: var(--font-mono);
+  pointer-events: none;
+}
+
+.graph-task-label {
+  fill: #f5d0fe;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.graph-time {
+  fill: var(--text-muted);
+  font-size: 10px;
+}
+
+.graph-region {
+  fill: var(--text-secondary);
+  font-size: 10px;
+}
+
+.graph-file-label {
+  fill: #cbd5e1;
+  font-size: 10px;
 }
 
 .task-table-wrap {

@@ -20,4 +20,36 @@ describe('CompactionProcessPanel table', () => {
     expect(source).toContain("const outputFileSortKey = ref<CompactionProcessFileSortKey>('time-range')")
     expect(source).toContain("const outputFileSortDirection = ref<SortDirection>('asc')")
   })
+
+  it('offers a visualization tab for compaction input/output relationships', () => {
+    expect(source).toContain("const activeTab = ref<ProcessTab>('table')")
+    expect(source).toContain("@click=\"activeTab = 'visualization'\"")
+    expect(source).toContain('Compaction graph')
+    expect(source).toContain('<svg')
+  })
+
+  it('renders file nodes as size-scaled circles', () => {
+    expect(source).toContain('function fileNodeRadius')
+    expect(source).toContain(':r="fileNodeRadius(node.file.sizeBytes)"')
+    expect(source).toContain('function graphFileNodeClass')
+    expect(source).toContain("role: GraphFileNode['role']")
+  })
+
+  it('links an output file to a later task when it becomes an input', () => {
+    expect(source).toContain('const lineageLinks = computed')
+    expect(source).toContain('latestOutputByFileId')
+    expect(source).toContain('function lineagePath')
+    expect(source).toContain('graph-lineage-link')
+    expect(source).toContain('Continued input')
+  })
+
+  it('lays all tasks into one correlated left-to-right flow', () => {
+    expect(source).toContain('const graphLayout = computed')
+    expect(source).toContain('fileNodeById')
+    expect(source).toContain('taskNodes')
+    expect(source).toContain('graphLinks')
+    expect(source).toContain('function graphLinkPath')
+    expect(source).toContain('v-for="link in graphLayout.graphLinks"')
+    expect(source).toContain('v-for="node in graphLayout.fileNodes"')
+  })
 })
