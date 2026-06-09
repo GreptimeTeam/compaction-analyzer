@@ -3,7 +3,6 @@ import { computed, defineComponent, onBeforeUnmount, onMounted, ref, watch, type
 import { formatBytes, formatDuration } from '../visualization'
 import { getMergeTimeSeverityMap, sortCompactionProcessFiles, sortCompactionProcessTasks, type CompactionProcessAnalysis, type CompactionProcessFile, type CompactionProcessFileSortKey, type CompactionProcessSortKey, type CompactionProcessTask, type SortDirection } from '../parser'
 
-type ProcessTab = 'table' | 'visualization'
 type GraphFileKind = 'input' | 'output'
 interface LineageNodeRef {
   taskIndex: number
@@ -56,7 +55,8 @@ export default defineComponent({
     },
   },
   setup(props) {
-    const activeTab = ref<ProcessTab>('table')
+    const showGraph = ref(false)
+    const visualizedTasks = ref<CompactionProcessTask[]>([])
     const sortKey = ref<CompactionProcessSortKey>('time')
     const sortDirection = ref<SortDirection>('desc')
     const processFileSearch = ref('')
@@ -129,8 +129,8 @@ export default defineComponent({
     })
     const tableTasks = computed(() => sortedTasks.value.filter(task => searchedTaskKeys.value.has(taskKey(task))))
     const defaultExpandedTaskKey = computed(() => tableTasks.value.find(task => directlyMatchedTaskKeys.value.has(taskKey(task))) ? taskKey(tableTasks.value.find(task => directlyMatchedTaskKeys.value.has(taskKey(task)))!) : null)
-    const graphLayoutTasks = computed(() => tracedGraphNode.value ? traceGraphTasks.value : graphTasks.value)
-    const graphHeight = computed(() => Math.max(360, graphTasks.value.length * 150 + 80))
+    const graphLayoutTasks = computed(() => visualizedTasks.value)
+    const graphHeight = computed(() => Math.max(360, graphLayoutTasks.value.length * 150 + 80))
     const graphTransform = computed(() => `translate(${graphPan.value.x} ${graphPan.value.y}) scale(${graphScale.value})`)
     const isGraphDragging = computed(() => graphDrag.value !== null)
     const showGraphMinimap = computed(() => graphScale.value > 1.05)
@@ -151,23 +151,34 @@ export default defineComponent({
       const fileNodeById = new Map<string, GraphFileNode>()
       const taskNodes: GraphTaskNode[] = []
       const graphLinks: GraphLink[] = []
-      const rowByFileId = new Map<string, number>()
+      const laneByFileId = new Map<string, number>()
       const rowByTaskId = new Map<string, number>()
       const rowGap = 56
       const fileColumnGap = 230
       const taskColumnGap = 230
-      let nextRow = 0
+      const layoutTasks = [...graphLayoutTasks.value].sort((a, b) => a.timestamp - b.timestamp)
+      let nextLane = 0
 
-      function rowForFile(fileId: string): number {
-        const existing = rowByFileId.get(fileId)
+      function laneForFile(fileId: string): number {
+        const existing = laneByFileId.get(fileId)
         if (existing !== undefined) return existing
-        rowByFileId.set(fileId, nextRow)
-        return nextRow++
+        laneByFileId.set(fileId, nextLane)
+        return nextLane++
+      }
+
+      function assignTaskLane(inputLanes: number[]): number {
+        if (inputLanes.length === 0) return nextLane++
+        const sortedLanes = [...inputLanes].sort((a, b) => a - b)
+        return sortedLanes[Math.floor(sortedLanes.length / 2)]
+      }
+
+      function sortedByLane(files: CompactionProcessFile[]): CompactionProcessFile[] {
+        return [...files].sort((a, b) => laneForFile(a.fileId) - laneForFile(b.fileId))
       }
 
       function ensureFileNode(file: CompactionProcessFile, column: number, role: GraphFileNode['role']): GraphFileNode {
         const existing = fileNodeById.get(file.fileId)
-        const row = rowForFile(file.fileId)
+        const row = laneForFile(file.fileId)
         const x = 120 + column * fileColumnGap
         const y = 90 + row * rowGap
         if (existing) {
@@ -181,19 +192,18 @@ export default defineComponent({
         return node
       }
 
-      graphLayoutTasks.value.forEach((task, taskIndex) => {
+      layoutTasks.forEach((task, taskIndex) => {
         const inputDepth = task.inputFiles.reduce((max, file) => Math.max(max, Math.floor((fileNodeById.get(file.fileId)?.x ?? 120) / fileColumnGap)), 0)
         const taskColumn = inputDepth + 1
         const outputColumn = taskColumn + 1
-        const inputRows = task.inputFiles.map(file => rowForFile(file.fileId))
-        const fallbackRow = rowByTaskId.get(taskKey(task)) ?? nextRow++
-        const taskRow = inputRows.length > 0 ? inputRows.reduce((sum, row) => sum + row, 0) / inputRows.length : fallbackRow
-        rowByTaskId.set(taskKey(task), taskRow)
+        const inputLanes = task.inputFiles.map(file => laneForFile(file.fileId))
+        const taskLane = assignTaskLane(inputLanes)
+        rowByTaskId.set(taskKey(task), taskLane)
         const taskNode = {
           id: taskKey(task),
           task,
           x: 120 + taskColumn * taskColumnGap,
-          y: 90 + taskRow * rowGap,
+          y: 90 + taskLane * rowGap,
         }
         taskNodes.push(taskNode)
 
@@ -201,23 +211,25 @@ export default defineComponent({
           ensureFileNode(file, Math.max(0, taskColumn - 1), 'input')
         })
 
-        task.outputFiles.forEach((file, fileIndex) => {
-          ensureFileNode(file, outputColumn, 'output')
-          if (!task.inputFiles.some(input => input.fileId === file.fileId) && !rowByFileId.has(file.fileId)) {
-            rowByFileId.set(file.fileId, Math.round(taskRow + fileIndex + 1))
+        let outputInheritsTaskLane = true
+        task.outputFiles.forEach((file) => {
+          if (!task.inputFiles.some(input => input.fileId === file.fileId) && !laneByFileId.has(file.fileId)) {
+            laneByFileId.set(file.fileId, outputInheritsTaskLane ? taskLane : nextLane++)
+            outputInheritsTaskLane = false
           }
+          ensureFileNode(file, outputColumn, 'output')
         })
       })
 
-      graphLayoutTasks.value.forEach((task) => {
+      layoutTasks.forEach((task) => {
         const taskNode = taskNodes.find(node => node.id === taskKey(task))
         if (!taskNode) return
-        task.inputFiles.forEach((file) => {
+        sortedByLane(task.inputFiles).forEach((file) => {
           const fileNode = fileNodeById.get(file.fileId)
           if (!fileNode) return
           graphLinks.push({ id: `in-${taskNode.id}-${file.fileId}`, fromX: fileNode.x, fromY: fileNode.y, fromRadius: fileNodeRadius(fileNode.file.sizeBytes), toX: taskNode.x, toY: taskNode.y, toRadius: 24, kind: 'input' })
         })
-        task.outputFiles.forEach((file) => {
+        sortedByLane(task.outputFiles).forEach((file) => {
           const fileNode = fileNodeById.get(file.fileId)
           if (!fileNode) return
           graphLinks.push({ id: `out-${taskNode.id}-${file.fileId}`, fromX: taskNode.x, fromY: taskNode.y, fromRadius: 24, toX: fileNode.x, toY: fileNode.y, toRadius: fileNodeRadius(fileNode.file.sizeBytes), kind: 'output' })
@@ -263,6 +275,8 @@ export default defineComponent({
     })
     watch(processFileSearch, () => {
       expandedTaskKey.value = null
+      showGraph.value = false
+      visualizedTasks.value = []
     })
     const lineageLinks = computed<LineageLink[]>(() => {
       const latestOutputByFileId = new Map<string, LineageNodeRef>()
@@ -347,6 +361,15 @@ export default defineComponent({
 
     function isDirectFileMatch(task: CompactionProcessTask): boolean {
       return directlyMatchedTaskKeys.value.has(taskKey(task))
+    }
+
+    function visualizeTableTasks() {
+      visualizedTasks.value = tableTasks.value
+      showGraph.value = true
+      tracedGraphNode.value = null
+      graphPan.value = { x: 0, y: 0 }
+      graphScale.value = 1
+      refreshGraphViewport()
     }
 
     function formatNum(n: number): string {
@@ -600,7 +623,7 @@ export default defineComponent({
       graphDidDrag.value = false
     }
 
-    return { activeTab, clearGraphSelection, clearGraphTrace, directlyMatchedTaskKeys, expandedTaskKey, fileMatchesSearch, fileNodeClass, fileNodeRadius, fileNodeX, fileNodeY, fileSortMark, fileTimeEnd, fileTimeRange, fileTimeStart, formatBytes, formatDuration, formatNum, formatMaybeDuration, graphCanvasRef, graphFileLabel, graphFileShortLabel, graphFileNodeClass, graphHeight, graphLayout, graphLinkPath, graphMinimapViewport, graphRowY, graphScale, graphPan, graphSvgRef, graphTasks, graphTransform, handleGraphPointerCancel, handleGraphPointerDown, handleGraphPointerMove, handleGraphPointerUp, handleGraphWheel, isDirectFileMatch, isGraphDragging, isTaskExpanded, lineageLinks, lineagePath, mergeTimeClass, prepareGraphFileSelection, prepareGraphTaskSelection, processFileSearch, refreshGraphViewport, selectedGraphNode, selectedGraphPopoverStyle, selectGraphFile, selectGraphTask, setFileSort, setSort, showGraphMinimap, sortedFiles, sortedTasks, sortMark, tableTasks, taskKey, taskNodeX, taskTime, toggleTask, traceGraphNode, tracedGraphNode }
+    return { clearGraphSelection, clearGraphTrace, directlyMatchedTaskKeys, expandedTaskKey, fileMatchesSearch, fileNodeClass, fileNodeRadius, fileNodeX, fileNodeY, fileSortMark, fileTimeEnd, fileTimeRange, fileTimeStart, formatBytes, formatDuration, formatNum, formatMaybeDuration, graphCanvasRef, graphFileLabel, graphFileShortLabel, graphFileNodeClass, graphHeight, graphLayout, graphLinkPath, graphMinimapViewport, graphRowY, graphScale, graphPan, graphSvgRef, graphTasks, graphTransform, handleGraphPointerCancel, handleGraphPointerDown, handleGraphPointerMove, handleGraphPointerUp, handleGraphWheel, isDirectFileMatch, isGraphDragging, isTaskExpanded, lineageLinks, lineagePath, mergeTimeClass, prepareGraphFileSelection, prepareGraphTaskSelection, processFileSearch, refreshGraphViewport, selectedGraphNode, selectedGraphPopoverStyle, selectGraphFile, selectGraphTask, setFileSort, setSort, showGraph, showGraphMinimap, sortedFiles, sortedTasks, sortMark, tableTasks, taskKey, taskNodeX, taskTime, toggleTask, traceGraphNode, tracedGraphNode, visualizeTableTasks, visualizedTasks }
   },
 })
 </script>
@@ -654,88 +677,15 @@ export default defineComponent({
       </div>
     </section>
 
-    <div class="process-tabs" role="tablist" aria-label="Compaction process views">
-      <button :class="['process-tab', { active: activeTab === 'table' }]" @click="activeTab = 'table'">Table</button>
-      <button :class="['process-tab', { active: activeTab === 'visualization' }]" @click="activeTab = 'visualization'">Visualization</button>
-    </div>
-
-    <section v-if="activeTab === 'visualization'" class="graph-wrap">
-      <div class="graph-header">
-        <div>
-          <h3>Compaction graph</h3>
-          <p>Input files flow into each compaction task and produce output files. Circle size is scaled by file size.</p>
-        </div>
-        <button v-if="tracedGraphNode" class="graph-trace-clear" @click="clearGraphTrace">Clear Trace</button>
-        <div class="graph-legend">
-          <span><i class="legend-dot input"></i>Input file</span>
-          <span><i class="legend-dot output"></i>Output file</span>
-          <span><i class="legend-dot task"></i>Task</span>
-          <span><i class="legend-line lineage"></i>Continued input</span>
-        </div>
-      </div>
-      <div ref="graphCanvasRef" :class="['graph-canvas', { dragging: isGraphDragging }]" @scroll="refreshGraphViewport">
-        <svg ref="graphSvgRef" :viewBox="`0 0 ${graphLayout.width} ${graphLayout.height}`" role="img" aria-label="Compaction input output relationship graph" @wheel.prevent="handleGraphWheel" @pointerdown="handleGraphPointerDown" @pointermove="handleGraphPointerMove" @pointerup="handleGraphPointerUp" @pointercancel="handleGraphPointerCancel" @lostpointercapture="handleGraphPointerCancel">
-          <defs>
-            <marker id="arrow-head" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
-              <path d="M0,0 L0,6 L9,3 z" class="arrow-head" />
-            </marker>
-          </defs>
-          <g :transform="graphTransform">
-            <path v-for="link in graphLayout.graphLinks" :key="link.id" :d="graphLinkPath(link)" :class="['graph-link', link.kind === 'input' ? 'input-link' : 'output-link']" marker-end="url(#arrow-head)">
-              <title>{{ link.kind === 'input' ? 'Input file feeds task' : 'Task produces output file' }}</title>
-            </path>
-            <g v-for="node in graphLayout.fileNodes" :key="node.id" role="button" tabindex="0" :aria-label="`File ${node.file.fileId}`" @pointerdown="prepareGraphFileSelection(node)" @click.stop @keydown.enter.stop.prevent="selectGraphFile(node)" @keydown.space.stop.prevent="selectGraphFile(node)">
-              <circle :class="graphFileNodeClass(node)" :cx="node.x" :cy="node.y" :r="fileNodeRadius(node.file.sizeBytes)">
-                <title>{{ graphFileLabel(node.file) }}</title>
-              </circle>
-              <text :x="node.x" :y="node.y + fileNodeRadius(node.file.sizeBytes) + 16" class="graph-file-label" text-anchor="middle">{{ graphFileShortLabel(node.file) }}</text>
-            </g>
-            <g v-for="node in graphLayout.taskNodes" :key="node.id" role="button" tabindex="0" :aria-label="`Task ${taskTime(node.task)}`" @pointerdown="prepareGraphTaskSelection(node)" @click.stop @keydown.enter.stop.prevent="selectGraphTask(node)" @keydown.space.stop.prevent="selectGraphTask(node)">
-              <circle class="graph-task-node" :cx="node.x" :cy="node.y" r="24">
-                <title>{{ node.task.inputFileCount }} input files compacted into {{ node.task.outputFileCount }} output files</title>
-              </circle>
-              <text :x="node.x" :y="node.y + 5" class="graph-task-label" text-anchor="middle" textLength="38" lengthAdjust="spacingAndGlyphs">{{ formatMaybeDuration(node.task.mergeMillis) }}</text>
-              <text :x="node.x" :y="node.y + 42" class="graph-region" text-anchor="middle">R{{ node.task.regionId }}</text>
-            </g>
-          </g>
-        </svg>
-        <div v-if="selectedGraphNode" class="graph-popover" :style="selectedGraphPopoverStyle">
-          <button class="graph-trace-button" @click.stop="traceGraphNode">Trace</button>
-          <template v-if="selectedGraphNode.kind === 'file'">
-            <h4>File {{ selectedGraphNode.node.file.fileId }}</h4>
-            <div><span>Level</span><strong>{{ selectedGraphNode.node.file.level }}</strong></div>
-            <div><span>Size</span><strong>{{ formatBytes(selectedGraphNode.node.file.sizeBytes) }}</strong></div>
-            <div><span>Start</span><strong>{{ fileTimeStart(selectedGraphNode.node.file) }}</strong></div>
-            <div><span>End</span><strong>{{ fileTimeEnd(selectedGraphNode.node.file) }}</strong></div>
-            <div><span>Role</span><strong>{{ selectedGraphNode.node.role }}</strong></div>
-          </template>
-          <template v-if="selectedGraphNode.kind === 'task'">
-            <h4>Task {{ taskTime(selectedGraphNode.node.task) }}</h4>
-            <div><span>Region / table</span><strong>{{ selectedGraphNode.node.task.regionId }} / {{ selectedGraphNode.node.task.tableId }}</strong></div>
-            <div><span>Input count</span><strong>{{ formatNum(selectedGraphNode.node.task.inputFileCount) }}</strong></div>
-            <div><span>Output count</span><strong>{{ formatNum(selectedGraphNode.node.task.outputFileCount) }}</strong></div>
-            <div><span>Input size</span><strong>{{ formatBytes(selectedGraphNode.node.task.inputBytes) }}</strong></div>
-            <div><span>Output size</span><strong>{{ formatBytes(selectedGraphNode.node.task.outputBytes) }}</strong></div>
-            <div><span>Merge time</span><strong>{{ formatMaybeDuration(selectedGraphNode.node.task.mergeMillis) }}</strong></div>
-            <div><span>Pick time</span><strong>{{ formatMaybeDuration(selectedGraphNode.node.task.pickMillis) }}</strong></div>
-            <div><span>Fan-out</span><strong>{{ formatNum(selectedGraphNode.node.task.fanOut) }}</strong></div>
-          </template>
-        </div>
-      </div>
-      <svg v-if="showGraphMinimap" class="graph-minimap" :viewBox="`0 0 ${graphLayout.width} ${graphLayout.height}`" aria-hidden="true">
-        <path v-for="link in graphLayout.graphLinks" :key="`minimap-${link.id}`" :d="graphLinkPath(link)" class="graph-minimap-link" />
-        <circle v-for="node in graphLayout.fileNodes" :key="`minimap-file-${node.id}`" :class="['graph-minimap-file', node.role]" :cx="node.x" :cy="node.y" r="10" />
-        <rect v-for="node in graphLayout.taskNodes" :key="`minimap-task-${node.id}`" class="graph-minimap-task" :x="node.x - 14" :y="node.y - 14" width="28" height="28" rx="6" />
-        <rect class="graph-minimap-viewport" :x="graphMinimapViewport.x" :y="graphMinimapViewport.y" :width="graphMinimapViewport.width" :height="graphMinimapViewport.height" />
-      </svg>
-    </section>
-
-     <section v-if="activeTab === 'table'" class="task-table-wrap">
+     <section class="task-table-wrap">
        <h3>Compaction Tasks</h3>
-       <label class="process-search">
-         <span>Search input file lineage</span>
-         <input v-model="processFileSearch" type="search" placeholder="Enter file id or fragment" />
-       </label>
+       <div class="process-search">
+         <label>
+           <span>Search input file lineage</span>
+           <input v-model="processFileSearch" type="search" placeholder="Enter file id or fragment" />
+         </label>
+         <button class="visualize-button" type="button" @click="visualizeTableTasks">Visualize</button>
+       </div>
        <div class="task-table">
         <div class="task-row header">
           <button class="sort-header" @click="setSort('time')">Time {{ sortMark('time') }}</button>
@@ -812,6 +762,77 @@ export default defineComponent({
           </div>
         </template>
       </div>
+    </section>
+
+    <section v-if="showGraph" class="graph-wrap">
+      <div class="graph-header">
+        <div>
+          <h3>Compaction graph</h3>
+          <p>Input files flow into each compaction task and produce output files. Circle size is scaled by file size.</p>
+        </div>
+        <button v-if="tracedGraphNode" class="graph-trace-clear" @click="clearGraphTrace">Clear Trace</button>
+        <div class="graph-legend">
+          <span><i class="legend-dot input"></i>Input file</span>
+          <span><i class="legend-dot output"></i>Output file</span>
+          <span><i class="legend-dot task"></i>Task</span>
+          <span><i class="legend-line lineage"></i>Continued input</span>
+        </div>
+      </div>
+      <div ref="graphCanvasRef" :class="['graph-canvas', { dragging: isGraphDragging }]" @scroll="refreshGraphViewport">
+        <svg ref="graphSvgRef" :viewBox="`0 0 ${graphLayout.width} ${graphLayout.height}`" role="img" aria-label="Compaction input output relationship graph" @wheel.prevent="handleGraphWheel" @pointerdown="handleGraphPointerDown" @pointermove="handleGraphPointerMove" @pointerup="handleGraphPointerUp" @pointercancel="handleGraphPointerCancel" @lostpointercapture="handleGraphPointerCancel">
+          <defs>
+            <marker id="arrow-head" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+              <path d="M0,0 L0,6 L9,3 z" class="arrow-head" />
+            </marker>
+          </defs>
+          <g :transform="graphTransform">
+            <path v-for="link in graphLayout.graphLinks" :key="link.id" :d="graphLinkPath(link)" :class="['graph-link', link.kind === 'input' ? 'input-link' : 'output-link']" marker-end="url(#arrow-head)">
+              <title>{{ link.kind === 'input' ? 'Input file feeds task' : 'Task produces output file' }}</title>
+            </path>
+            <g v-for="node in graphLayout.fileNodes" :key="node.id" role="button" tabindex="0" :aria-label="`File ${node.file.fileId}`" @pointerdown="prepareGraphFileSelection(node)" @click.stop @keydown.enter.stop.prevent="selectGraphFile(node)" @keydown.space.stop.prevent="selectGraphFile(node)">
+              <circle :class="graphFileNodeClass(node)" :cx="node.x" :cy="node.y" :r="fileNodeRadius(node.file.sizeBytes)">
+                <title>{{ graphFileLabel(node.file) }}</title>
+              </circle>
+              <text :x="node.x" :y="node.y + fileNodeRadius(node.file.sizeBytes) + 16" class="graph-file-label" text-anchor="middle">{{ graphFileShortLabel(node.file) }}</text>
+            </g>
+            <g v-for="node in graphLayout.taskNodes" :key="node.id" role="button" tabindex="0" :aria-label="`Task ${taskTime(node.task)}`" @pointerdown="prepareGraphTaskSelection(node)" @click.stop @keydown.enter.stop.prevent="selectGraphTask(node)" @keydown.space.stop.prevent="selectGraphTask(node)">
+              <circle class="graph-task-node" :cx="node.x" :cy="node.y" r="24">
+                <title>{{ node.task.inputFileCount }} input files compacted into {{ node.task.outputFileCount }} output files</title>
+              </circle>
+              <text :x="node.x" :y="node.y + 5" class="graph-task-label" text-anchor="middle" textLength="38" lengthAdjust="spacingAndGlyphs">{{ formatMaybeDuration(node.task.mergeMillis) }}</text>
+              <text :x="node.x" :y="node.y + 42" class="graph-region" text-anchor="middle">R{{ node.task.regionId }}</text>
+            </g>
+          </g>
+        </svg>
+        <div v-if="selectedGraphNode" class="graph-popover" :style="selectedGraphPopoverStyle">
+          <button class="graph-trace-button" @click.stop="traceGraphNode">Trace</button>
+          <template v-if="selectedGraphNode.kind === 'file'">
+            <h4>File {{ selectedGraphNode.node.file.fileId }}</h4>
+            <div><span>Level</span><strong>{{ selectedGraphNode.node.file.level }}</strong></div>
+            <div><span>Size</span><strong>{{ formatBytes(selectedGraphNode.node.file.sizeBytes) }}</strong></div>
+            <div><span>Start</span><strong>{{ fileTimeStart(selectedGraphNode.node.file) }}</strong></div>
+            <div><span>End</span><strong>{{ fileTimeEnd(selectedGraphNode.node.file) }}</strong></div>
+            <div><span>Role</span><strong>{{ selectedGraphNode.node.role }}</strong></div>
+          </template>
+          <template v-if="selectedGraphNode.kind === 'task'">
+            <h4>Task {{ taskTime(selectedGraphNode.node.task) }}</h4>
+            <div><span>Region / table</span><strong>{{ selectedGraphNode.node.task.regionId }} / {{ selectedGraphNode.node.task.tableId }}</strong></div>
+            <div><span>Input count</span><strong>{{ formatNum(selectedGraphNode.node.task.inputFileCount) }}</strong></div>
+            <div><span>Output count</span><strong>{{ formatNum(selectedGraphNode.node.task.outputFileCount) }}</strong></div>
+            <div><span>Input size</span><strong>{{ formatBytes(selectedGraphNode.node.task.inputBytes) }}</strong></div>
+            <div><span>Output size</span><strong>{{ formatBytes(selectedGraphNode.node.task.outputBytes) }}</strong></div>
+            <div><span>Merge time</span><strong>{{ formatMaybeDuration(selectedGraphNode.node.task.mergeMillis) }}</strong></div>
+            <div><span>Pick time</span><strong>{{ formatMaybeDuration(selectedGraphNode.node.task.pickMillis) }}</strong></div>
+            <div><span>Fan-out</span><strong>{{ formatNum(selectedGraphNode.node.task.fanOut) }}</strong></div>
+          </template>
+        </div>
+      </div>
+      <svg v-if="showGraphMinimap" class="graph-minimap" :viewBox="`0 0 ${graphLayout.width} ${graphLayout.height}`" aria-hidden="true">
+        <path v-for="link in graphLayout.graphLinks" :key="`minimap-${link.id}`" :d="graphLinkPath(link)" class="graph-minimap-link" />
+        <circle v-for="node in graphLayout.fileNodes" :key="`minimap-file-${node.id}`" :class="['graph-minimap-file', node.role]" :cx="node.x" :cy="node.y" r="10" />
+        <rect v-for="node in graphLayout.taskNodes" :key="`minimap-task-${node.id}`" class="graph-minimap-task" :x="node.x - 14" :y="node.y - 14" width="28" height="28" rx="6" />
+        <rect class="graph-minimap-viewport" :x="graphMinimapViewport.x" :y="graphMinimapViewport.y" :width="graphMinimapViewport.width" :height="graphMinimapViewport.height" />
+      </svg>
     </section>
   </div>
 </template>
@@ -902,35 +923,6 @@ export default defineComponent({
   color: var(--text-muted);
   font-size: 12px;
   margin-top: 6px;
-}
-
-.process-tabs {
-  display: inline-flex;
-  gap: 4px;
-  padding: 4px;
-  margin: 0 0 16px;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  background: var(--bg-surface);
-}
-
-.process-tab {
-  border: none;
-  border-radius: 999px;
-  padding: 8px 16px;
-  background: transparent;
-  color: var(--text-secondary);
-  cursor: pointer;
-  font-family: inherit;
-  font-size: 13px;
-  font-weight: 700;
-  transition: all 0.2s;
-}
-
-.process-tab:hover,
-.process-tab.active {
-  background: var(--primary);
-  color: white;
 }
 
 .graph-wrap {
@@ -1230,13 +1222,20 @@ export default defineComponent({
 }
 
 .process-search {
-  display: grid;
-  gap: 6px;
+  display: flex;
+  align-items: end;
+  gap: 12px;
   padding: 14px 18px;
   border-bottom: 1px solid var(--border);
   color: var(--text-secondary);
   font-size: 12px;
   font-weight: 700;
+}
+
+.process-search label {
+  display: grid;
+  gap: 6px;
+  flex: 1;
 }
 
 .process-search input {
@@ -1247,6 +1246,23 @@ export default defineComponent({
   background: var(--bg);
   color: var(--text);
   font-family: var(--font-mono);
+}
+
+.visualize-button {
+  border: 1px solid rgba(96, 165, 250, 0.45);
+  border-radius: 10px;
+  padding: 10px 14px;
+  background: rgba(37, 99, 235, 0.22);
+  color: #dbeafe;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.visualize-button:hover {
+  border-color: rgba(147, 197, 253, 0.8);
+  background: rgba(37, 99, 235, 0.38);
 }
 
 .task-row {
