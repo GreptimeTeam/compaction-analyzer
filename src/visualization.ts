@@ -59,20 +59,76 @@ interface LayoutResult {
 }
 
 function buildOverlapSet(files: AliveFile[]): Set<string> {
+  type Interval = { fileId: string; start: number; end: number }
+  type OverlapEvent = { time: number; starts: Interval[]; ends: string[]; points: string[] }
+
+  const events = new Map<number, OverlapEvent>()
+  const active = new Set<string>()
+  const unmarkedActive = new Set<string>()
   const ids = new Set<string>()
-  const withRange = files.filter(f => f.timeRange)
-  for (let i = 0; i < withRange.length; i++) {
-    const a = withRange[i]
-    const [aS, aE] = a.timeRange!
-    const aP = aS === aE
-    for (let j = i + 1; j < withRange.length; j++) {
-      const b = withRange[j]
-      const [bS, bE] = b.timeRange!
-      const bP = bS === bE
-      const ov = (aP || bP) ? aS <= bE && bS <= aE : aS < bE && bS < aE
-      if (ov) { ids.add(a.fileId); ids.add(b.fileId) }
+
+  function eventAt(time: number): OverlapEvent {
+    let event = events.get(time)
+    if (!event) {
+      event = { time, starts: [], ends: [], points: [] }
+      events.set(time, event)
+    }
+    return event
+  }
+
+  function mark(fileId: string) {
+    ids.add(fileId)
+    unmarkedActive.delete(fileId)
+  }
+
+  function markUnmarkedActive() {
+    for (const fileId of unmarkedActive) ids.add(fileId)
+    unmarkedActive.clear()
+  }
+
+  for (const file of files) {
+    if (!file.timeRange) continue
+    const [start, end] = file.timeRange
+    if (start === end) {
+      eventAt(start).points.push(file.fileId)
+    } else {
+      const interval = { fileId: file.fileId, start, end }
+      eventAt(start).starts.push(interval)
+      eventAt(end).ends.push(file.fileId)
     }
   }
+
+  const overlapEvents = [...events.values()]
+  overlapEvents.sort((a, b) => a.time - b.time)
+
+  for (const event of overlapEvents) {
+    if (event.points.length > 0) {
+      if (active.size + event.starts.length > 0 || event.points.length > 1) {
+        for (const fileId of event.points) mark(fileId)
+      }
+      if (active.size + event.starts.length > 0) {
+        markUnmarkedActive()
+        for (const interval of event.starts) mark(interval.fileId)
+      }
+    }
+
+    for (const fileId of event.ends) {
+      active.delete(fileId)
+      unmarkedActive.delete(fileId)
+    }
+
+    if (event.starts.length > 0) {
+      if (active.size > 0 || event.starts.length > 1) {
+        markUnmarkedActive()
+        for (const interval of event.starts) mark(interval.fileId)
+      }
+      for (const interval of event.starts) {
+        active.add(interval.fileId)
+        if (!ids.has(interval.fileId)) unmarkedActive.add(interval.fileId)
+      }
+    }
+  }
+
   return ids
 }
 
@@ -201,6 +257,29 @@ export function formatDuration(ms: number): string {
   if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`
   if (ms < 3600000) return `${(ms / 60000).toFixed(1)}m`
   return `${(ms / 3600000).toFixed(1)}h`
+}
+
+export function benchmarkVisualizationData(files: AliveFile[]) {
+  const benchmarkStart = performance.now()
+  let stageStart = benchmarkStart
+  const layout = buildLayout(files)
+  stageStart = logVisualizationStage('buildLayout', stageStart)
+  const overlapSet = buildOverlapSet(files)
+  stageStart = logVisualizationStage('buildOverlapSet', stageStart)
+  logVisualizationStage('total', benchmarkStart)
+  return {
+    placedCount: layout.placed.length,
+    numTracks: layout.numTracks,
+    overlapCount: overlapSet.size,
+    minTime: layout.minTime,
+    maxTime: layout.maxTime,
+  }
+}
+
+function logVisualizationStage(label: string, start: number): number {
+  const now = performance.now()
+  console.log(`[visualization] ${label}: ${(now - start).toFixed(1)} ms`)
+  return now
 }
 
 export function createVisualization(canvas: HTMLCanvasElement, files: AliveFile[]) {

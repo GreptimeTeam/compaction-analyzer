@@ -2,6 +2,7 @@ import { readFile } from 'node:fs/promises'
 import { statSync } from 'node:fs'
 import { performance } from 'node:perf_hooks'
 import { analyze, parseAliveFileList } from '../src/parser.ts'
+import { benchmarkVisualizationData } from '../src/visualization.ts'
 
 const inputPath = process.argv[2]
 
@@ -66,6 +67,7 @@ const content = await measureAsync('readFile', () => readFile(inputPath, 'utf8')
 const parsed = measure('parseAliveFileList', () => parseAliveFileList(content))
 const loaded = measure('handleFilesLoaded', () => handleFilesLoaded(parsed))
 const filtered = measure('applyFilters/analyze', () => applyFilters(loaded))
+const visualized = measure('postAnalyze/visualizationData', () => benchmarkVisualizationData(filtered.files))
 const totalMs = performance.now() - totalStart
 
 console.log(`Input: ${inputPath}`)
@@ -82,3 +84,6 @@ console.log(`totalSize: ${formatBytes(filtered.analysisResult.totalSizeBytes)}`)
 console.log(`overlappingFiles: ${filtered.analysisResult.overlappingFiles}`)
 console.log(`maxOverlapDepth: ${filtered.analysisResult.maxOverlapDepth}`)
 console.log(`avgOverlapDepth: ${filtered.analysisResult.avgOverlapDepth.toFixed(2)}`)
+console.log(`visualizedFiles: ${visualized.placedCount}`)
+console.log(`visualizationTracks: ${visualized.numTracks}`)
+console.log(`visualizationOverlaps: ${visualized.overlapCount}`)
