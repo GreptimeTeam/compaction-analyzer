@@ -1,7 +1,7 @@
 <script lang="ts">
 import { computed, defineComponent, onBeforeUnmount, onMounted, ref, type PropType } from 'vue'
 import { formatBytes, formatDuration } from '../visualization'
-import { getMergeTimeSeverity, sortCompactionProcessFiles, sortCompactionProcessTasks, type CompactionProcessAnalysis, type CompactionProcessFile, type CompactionProcessFileSortKey, type CompactionProcessSortKey, type CompactionProcessTask, type SortDirection } from '../parser'
+import { getMergeTimeSeverityMap, sortCompactionProcessFiles, sortCompactionProcessTasks, type CompactionProcessAnalysis, type CompactionProcessFile, type CompactionProcessFileSortKey, type CompactionProcessSortKey, type CompactionProcessTask, type SortDirection } from '../parser'
 
 type ProcessTab = 'table' | 'visualization'
 type GraphFileKind = 'input' | 'output'
@@ -77,6 +77,7 @@ export default defineComponent({
     const graphViewportRevision = ref(0)
 
     const sortedTasks = computed(() => sortCompactionProcessTasks(props.analysis.tasks, sortKey.value, sortDirection.value))
+    const mergeTimeSeverities = computed(() => getMergeTimeSeverityMap(props.analysis.tasks))
     const graphTasks = computed(() => sortCompactionProcessTasks(props.analysis.tasks, 'time', 'asc'))
     const traceGraphTasks = computed(() => {
       if (!tracedGraphNode.value) return []
@@ -311,7 +312,7 @@ export default defineComponent({
     }
 
     function mergeTimeClass(task: CompactionProcessTask): string {
-      return `merge-badge ${getMergeTimeSeverity(task, props.analysis.tasks)}`
+      return `merge-badge ${mergeTimeSeverities.value.get(task) ?? 'none'}`
     }
 
     function taskTime(task: CompactionProcessTask): string {

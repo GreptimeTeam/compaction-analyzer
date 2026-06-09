@@ -8,6 +8,7 @@
     "build": "vue-tsc --noEmit && vite build",
     "test": "vitest run",
     "bench:alive": "tsx scripts/bench-alive.mjs",
+    "bench:process": "tsx scripts/bench-process.mjs",
     "preview": "vite preview",
     "deploy": "npm run build && wrangler pages deploy dist"
   },

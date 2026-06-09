@@ -293,7 +293,25 @@ export function getMergeTimeSeverity(task: CompactionProcessTask, tasks: Compact
   const sorted = sortCompactionProcessTasks(withMerge, 'merge', 'desc')
   const rank = sorted.findIndex(t => t === task)
   if (rank < 0) return 'none'
-  const percentile = (rank + 1) / sorted.length
+  return mergeTimeSeverityForRank(rank, sorted.length)
+}
+
+export function getMergeTimeSeverityMap(tasks: CompactionProcessTask[]): Map<CompactionProcessTask, MergeTimeSeverity> {
+  const severities = new Map<CompactionProcessTask, MergeTimeSeverity>()
+  const withMerge = tasks.filter(t => t.mergeMillis !== null)
+  const sorted = sortCompactionProcessTasks(withMerge, 'merge', 'desc')
+
+  for (const task of tasks) {
+    severities.set(task, 'none')
+  }
+  sorted.forEach((task, rank) => {
+    severities.set(task, mergeTimeSeverityForRank(rank, sorted.length))
+  })
+  return severities
+}
+
+function mergeTimeSeverityForRank(rank: number, total: number): MergeTimeSeverity {
+  const percentile = (rank + 1) / total
   if (percentile <= 0.1) return 'red'
   if (percentile <= 0.3) return 'orange'
   if (percentile <= 0.5) return 'yellow'

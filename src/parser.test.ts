@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { analyzeCompactionProcessTasks, analyzeCompactionProcesses, getMergeTimeSeverity, parseCompactionProcessTasksFromLog, parseLogCsv, sortCompactionProcessFiles, sortCompactionProcessTasks } from './parser'
+import { analyzeCompactionProcessTasks, analyzeCompactionProcesses, getMergeTimeSeverity, getMergeTimeSeverityMap, parseCompactionProcessTasksFromLog, parseLogCsv, sortCompactionProcessFiles, sortCompactionProcessTasks } from './parser'
 import source from './parser.ts?raw'
 
 describe('analyzeCompactionProcesses', () => {
@@ -160,6 +160,30 @@ describe('analyzeCompactionProcesses', () => {
     expect(getMergeTimeSeverity(tasks[4], tasks)).toBe('yellow')
     expect(getMergeTimeSeverity(tasks[5], tasks)).toBe('green')
     expect(getMergeTimeSeverity(makeTask({ mergeMillis: null }), tasks)).toBe('none')
+  })
+
+  it('precomputes merge time colors once for all table rows', () => {
+    const tasks = [1000, 900, 800, 700, 600, 500, 400, 300, 200, 100, null].map((mergeMillis, i) => makeTask({
+      timestamp: i,
+      mergeMillis,
+    }))
+
+    const severities = getMergeTimeSeverityMap(tasks)
+
+    expect(tasks.map(task => severities.get(task))).toEqual([
+      'red',
+      'orange',
+      'orange',
+      'yellow',
+      'yellow',
+      'green',
+      'green',
+      'green',
+      'green',
+      'green',
+      'none',
+    ])
+    expect(severities.size).toBe(tasks.length)
   })
 
   it('sorts compaction detail files by requested columns', () => {

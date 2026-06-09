@@ -21,6 +21,13 @@ describe('CompactionProcessPanel table', () => {
     expect(source).toContain("const outputFileSortDirection = ref<SortDirection>('asc')")
   })
 
+  it('precomputes merge severity for table rows instead of sorting per row', () => {
+    expect(source).toContain('getMergeTimeSeverityMap')
+    expect(source).toContain('const mergeTimeSeverities = computed(() => getMergeTimeSeverityMap(props.analysis.tasks))')
+    expect(source).toContain('mergeTimeSeverities.value.get(task)')
+    expect(source).not.toContain('getMergeTimeSeverity(task, props.analysis.tasks)')
+  })
+
   it('offers a visualization tab for compaction input/output relationships', () => {
     expect(source).toContain("const activeTab = ref<ProcessTab>('table')")
     expect(source).toContain("@click=\"activeTab = 'visualization'\"")
