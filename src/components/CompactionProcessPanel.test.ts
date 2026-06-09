@@ -28,6 +28,34 @@ describe('CompactionProcessPanel table', () => {
     expect(source).not.toContain('getMergeTimeSeverity(task, props.analysis.tasks)')
   })
 
+  it('filters table tasks by searched file lineage', () => {
+    expect(source).toContain("const processFileSearch = ref('')")
+    expect(source).toContain('const searchedTaskKeys = computed(() =>')
+    expect(source).toContain('file.fileId.toLowerCase().includes(query)')
+    expect(source).toContain('addAncestorTasks(ancestorFileIds, taskIds, tracedFileIds)')
+    expect(source).toContain('addDescendantTasks(descendantFileIds, taskIds, tracedFileIds)')
+    expect(source).toContain('const tableTasks = computed(() =>')
+    expect(source).toContain('sortedTasks.value.filter(task => searchedTaskKeys.value.has(taskKey(task)))')
+    expect(source).toContain('v-model="processFileSearch"')
+    expect(source).toContain('Search input file lineage')
+    expect(source).toContain('v-for="task in tableTasks"')
+  })
+
+  it('expands and highlights directly matched file tasks by default', () => {
+    expect(source).toContain('const directlyMatchedTaskKeys = computed(() =>')
+    expect(source).toContain('const defaultExpandedTaskKey = computed(() =>')
+    expect(source).toContain('expandedTaskKey.value ?? defaultExpandedTaskKey.value')
+    expect(source).toContain('watch(processFileSearch')
+    expect(source).toContain('function isTaskExpanded')
+    expect(source).toContain('function isDirectFileMatch')
+    expect(source).toContain('function fileMatchesSearch')
+    expect(source).toContain("'search-hit': directlyMatchedTaskKeys.has(taskKey(task))")
+    expect(source).toContain("'file-search-hit': fileMatchesSearch(file)")
+    expect(source).toContain('v-if="isTaskExpanded(task)"')
+    expect(source).toContain('.task-row-button.search-hit')
+    expect(source).toContain('.file-row.file-search-hit')
+  })
+
   it('offers a visualization tab for compaction input/output relationships', () => {
     expect(source).toContain("const activeTab = ref<ProcessTab>('table')")
     expect(source).toContain("@click=\"activeTab = 'visualization'\"")

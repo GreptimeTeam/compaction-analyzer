@@ -1,5 +1,5 @@
 <script lang="ts">
-import { computed, defineComponent, onBeforeUnmount, onMounted, ref, type PropType } from 'vue'
+import { computed, defineComponent, onBeforeUnmount, onMounted, ref, watch, type PropType } from 'vue'
 import { formatBytes, formatDuration } from '../visualization'
 import { getMergeTimeSeverityMap, sortCompactionProcessFiles, sortCompactionProcessTasks, type CompactionProcessAnalysis, type CompactionProcessFile, type CompactionProcessFileSortKey, type CompactionProcessSortKey, type CompactionProcessTask, type SortDirection } from '../parser'
 
@@ -59,6 +59,7 @@ export default defineComponent({
     const activeTab = ref<ProcessTab>('table')
     const sortKey = ref<CompactionProcessSortKey>('time')
     const sortDirection = ref<SortDirection>('desc')
+    const processFileSearch = ref('')
     const inputFileSortKey = ref<CompactionProcessFileSortKey>('time-range')
     const inputFileSortDirection = ref<SortDirection>('asc')
     const outputFileSortKey = ref<CompactionProcessFileSortKey>('time-range')
@@ -100,6 +101,34 @@ export default defineComponent({
       addDescendantTasks(descendantFileIds, taskIds, tracedFileIds)
       return graphTasks.value.filter(task => taskIds.has(taskKey(task)))
     })
+    const searchedTaskKeys = computed(() => {
+      const query = processFileSearch.value.trim().toLowerCase()
+      if (!query) return new Set(sortedTasks.value.map(task => taskKey(task)))
+
+      const seedFileIds = new Set<string>()
+      graphTasks.value.forEach((task) => {
+        ;[...task.inputFiles, ...task.outputFiles].forEach((file) => {
+          if (file.fileId.toLowerCase().includes(query)) seedFileIds.add(file.fileId)
+        })
+      })
+
+      const taskIds = new Set<string>()
+      const ancestorFileIds = new Set(seedFileIds)
+      const descendantFileIds = new Set(seedFileIds)
+      const tracedFileIds = new Set(seedFileIds)
+      addAncestorTasks(ancestorFileIds, taskIds, tracedFileIds)
+      addDescendantTasks(descendantFileIds, taskIds, tracedFileIds)
+      return taskIds
+    })
+    const directlyMatchedTaskKeys = computed(() => {
+      const taskIds = new Set<string>()
+      for (const task of graphTasks.value) {
+        if ([...task.inputFiles, ...task.outputFiles].some(fileMatchesSearch)) taskIds.add(taskKey(task))
+      }
+      return taskIds
+    })
+    const tableTasks = computed(() => sortedTasks.value.filter(task => searchedTaskKeys.value.has(taskKey(task))))
+    const defaultExpandedTaskKey = computed(() => tableTasks.value.find(task => directlyMatchedTaskKeys.value.has(taskKey(task))) ? taskKey(tableTasks.value.find(task => directlyMatchedTaskKeys.value.has(taskKey(task)))!) : null)
     const graphLayoutTasks = computed(() => tracedGraphNode.value ? traceGraphTasks.value : graphTasks.value)
     const graphHeight = computed(() => Math.max(360, graphTasks.value.length * 150 + 80))
     const graphTransform = computed(() => `translate(${graphPan.value.x} ${graphPan.value.y}) scale(${graphScale.value})`)
@@ -232,6 +261,9 @@ export default defineComponent({
     onBeforeUnmount(() => {
       window.removeEventListener('resize', refreshGraphViewport)
     })
+    watch(processFileSearch, () => {
+      expandedTaskKey.value = null
+    })
     const lineageLinks = computed<LineageLink[]>(() => {
       const latestOutputByFileId = new Map<string, LineageNodeRef>()
       const links: LineageLink[] = []
@@ -300,7 +332,21 @@ export default defineComponent({
 
     function toggleTask(task: CompactionProcessTask) {
       const key = taskKey(task)
-      expandedTaskKey.value = expandedTaskKey.value === key ? null : key
+      const currentKey = expandedTaskKey.value ?? defaultExpandedTaskKey.value
+      expandedTaskKey.value = currentKey === key ? null : key
+    }
+
+    function isTaskExpanded(task: CompactionProcessTask): boolean {
+      return (expandedTaskKey.value ?? defaultExpandedTaskKey.value) === taskKey(task)
+    }
+
+    function fileMatchesSearch(file: CompactionProcessFile): boolean {
+      const query = processFileSearch.value.trim().toLowerCase()
+      return query !== '' && file.fileId.toLowerCase().includes(query)
+    }
+
+    function isDirectFileMatch(task: CompactionProcessTask): boolean {
+      return directlyMatchedTaskKeys.value.has(taskKey(task))
     }
 
     function formatNum(n: number): string {
@@ -554,7 +600,7 @@ export default defineComponent({
       graphDidDrag.value = false
     }
 
-    return { activeTab, clearGraphSelection, clearGraphTrace, expandedTaskKey, fileNodeClass, fileNodeRadius, fileNodeX, fileNodeY, fileSortMark, fileTimeEnd, fileTimeRange, fileTimeStart, formatBytes, formatDuration, formatNum, formatMaybeDuration, graphCanvasRef, graphFileLabel, graphFileShortLabel, graphFileNodeClass, graphHeight, graphLayout, graphLinkPath, graphMinimapViewport, graphRowY, graphScale, graphPan, graphSvgRef, graphTasks, graphTransform, handleGraphPointerCancel, handleGraphPointerDown, handleGraphPointerMove, handleGraphPointerUp, handleGraphWheel, isGraphDragging, lineageLinks, lineagePath, mergeTimeClass, prepareGraphFileSelection, prepareGraphTaskSelection, refreshGraphViewport, selectedGraphNode, selectedGraphPopoverStyle, selectGraphFile, selectGraphTask, setFileSort, setSort, showGraphMinimap, sortedFiles, sortedTasks, sortMark, taskKey, taskNodeX, taskTime, toggleTask, traceGraphNode, tracedGraphNode }
+    return { activeTab, clearGraphSelection, clearGraphTrace, directlyMatchedTaskKeys, expandedTaskKey, fileMatchesSearch, fileNodeClass, fileNodeRadius, fileNodeX, fileNodeY, fileSortMark, fileTimeEnd, fileTimeRange, fileTimeStart, formatBytes, formatDuration, formatNum, formatMaybeDuration, graphCanvasRef, graphFileLabel, graphFileShortLabel, graphFileNodeClass, graphHeight, graphLayout, graphLinkPath, graphMinimapViewport, graphRowY, graphScale, graphPan, graphSvgRef, graphTasks, graphTransform, handleGraphPointerCancel, handleGraphPointerDown, handleGraphPointerMove, handleGraphPointerUp, handleGraphWheel, isDirectFileMatch, isGraphDragging, isTaskExpanded, lineageLinks, lineagePath, mergeTimeClass, prepareGraphFileSelection, prepareGraphTaskSelection, processFileSearch, refreshGraphViewport, selectedGraphNode, selectedGraphPopoverStyle, selectGraphFile, selectGraphTask, setFileSort, setSort, showGraphMinimap, sortedFiles, sortedTasks, sortMark, tableTasks, taskKey, taskNodeX, taskTime, toggleTask, traceGraphNode, tracedGraphNode }
   },
 })
 </script>
@@ -684,9 +730,13 @@ export default defineComponent({
       </svg>
     </section>
 
-    <section v-if="activeTab === 'table'" class="task-table-wrap">
-      <h3>Compaction Tasks</h3>
-      <div class="task-table">
+     <section v-if="activeTab === 'table'" class="task-table-wrap">
+       <h3>Compaction Tasks</h3>
+       <label class="process-search">
+         <span>Search input file lineage</span>
+         <input v-model="processFileSearch" type="search" placeholder="Enter file id or fragment" />
+       </label>
+       <div class="task-table">
         <div class="task-row header">
           <button class="sort-header" @click="setSort('time')">Time {{ sortMark('time') }}</button>
           <span>Region</span>
@@ -697,11 +747,11 @@ export default defineComponent({
           <button class="sort-header" @click="setSort('merge')">Merge time {{ sortMark('merge') }}</button>
           <span>Pick</span>
         </div>
-        <template v-for="task in sortedTasks" :key="taskKey(task)">
-          <button
-            :class="['task-row', 'task-row-button', { expanded: expandedTaskKey === taskKey(task) }]"
-            @click="toggleTask(task)"
-          >
+         <template v-for="task in tableTasks" :key="taskKey(task)">
+           <button
+             :class="['task-row', 'task-row-button', { expanded: isTaskExpanded(task), 'search-hit': directlyMatchedTaskKeys.has(taskKey(task)) }]"
+             @click="toggleTask(task)"
+           >
             <span class="mono">{{ taskTime(task) }}</span>
             <span>{{ task.regionId }} / {{ task.tableId }}</span>
             <span>{{ formatNum(task.inputFileCount) }}</span>
@@ -711,7 +761,7 @@ export default defineComponent({
             <span :class="mergeTimeClass(task)">{{ formatMaybeDuration(task.mergeMillis) }}</span>
             <span>{{ formatMaybeDuration(task.pickMillis) }}</span>
           </button>
-          <div v-if="expandedTaskKey === taskKey(task)" class="task-detail">
+          <div v-if="isTaskExpanded(task)" class="task-detail">
             <div class="detail-grid">
               <div><span class="detail-label">Region</span><span>{{ task.regionId }}</span></div>
               <div><span class="detail-label">Table</span><span>{{ task.tableId }}</span></div>
@@ -730,7 +780,7 @@ export default defineComponent({
                   <button class="sort-header" @click="setFileSort('input', 'size')">Size {{ fileSortMark('input', 'size') }}</button>
                   <button class="sort-header" @click="setFileSort('input', 'time-range')">Time range {{ fileSortMark('input', 'time-range') }}</button>
                 </div>
-                <div v-for="file in sortedFiles('input', task.inputFiles)" :key="file.fileId" class="file-row">
+                <div v-for="file in sortedFiles('input', task.inputFiles)" :key="file.fileId" :class="['file-row', { 'file-search-hit': fileMatchesSearch(file) }]">
                   <span class="mono file-id">{{ file.fileId }}</span>
                   <span>{{ file.level }}</span>
                   <span>{{ formatBytes(file.sizeBytes) }}</span>
@@ -748,7 +798,7 @@ export default defineComponent({
                   <button class="sort-header" @click="setFileSort('output', 'size')">Size {{ fileSortMark('output', 'size') }}</button>
                   <button class="sort-header" @click="setFileSort('output', 'time-range')">Time range {{ fileSortMark('output', 'time-range') }}</button>
                 </div>
-                <div v-for="file in sortedFiles('output', task.outputFiles)" :key="file.fileId" class="file-row">
+                <div v-for="file in sortedFiles('output', task.outputFiles)" :key="file.fileId" :class="['file-row', { 'file-search-hit': fileMatchesSearch(file) }]">
                   <span class="mono file-id">{{ file.fileId }}</span>
                   <span>{{ file.level }}</span>
                   <span>{{ formatBytes(file.sizeBytes) }}</span>
@@ -1179,6 +1229,26 @@ export default defineComponent({
   min-width: 1040px;
 }
 
+.process-search {
+  display: grid;
+  gap: 6px;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.process-search input {
+  width: min(520px, 100%);
+  border: 1px solid rgba(96, 165, 250, 0.35);
+  border-radius: 10px;
+  padding: 10px 12px;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-mono);
+}
+
 .task-row {
   display: grid;
   grid-template-columns: 180px 180px 120px 130px 120px 120px 110px 90px;
@@ -1203,6 +1273,12 @@ export default defineComponent({
 .task-row-button.expanded {
   background: rgba(74, 144, 226, 0.08);
   color: var(--text);
+}
+
+.task-row-button.search-hit {
+  background: rgba(250, 204, 21, 0.12);
+  color: var(--text);
+  box-shadow: inset 3px 0 0 #facc15;
 }
 
 .task-row.header {
@@ -1332,6 +1408,12 @@ export default defineComponent({
   border-bottom: 1px solid rgba(96, 165, 250, 0.18);
   color: #c7d2fe;
   font-size: 11px;
+}
+
+.file-row.file-search-hit {
+  background: rgba(250, 204, 21, 0.16);
+  color: #fef3c7;
+  box-shadow: inset 3px 0 0 #facc15;
 }
 
 .file-row-head {
