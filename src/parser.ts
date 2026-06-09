@@ -112,7 +112,9 @@ export function parseAliveFileListCsv(csv: string): ParseResult {
     })
   }
 
+  console.log(`[parseAliveFileListCsv] Before sort`)
   aliveFiles.sort((a, b) => a.fileId.localeCompare(b.fileId))
+  console.log(`[parseAliveFileListCsv] Parsed ${aliveFiles.length} alive files from CSV`)
   return { aliveFiles }
 }
 
@@ -605,27 +607,14 @@ function parseUnixNanos(value: string, lineNum: number): number {
 // ── Analysis ──
 
 export function analyze(files: AliveFile[]): AnalysisResult {
+  const analyzeStart = performance.now()
+  let stageStart = analyzeStart
+  console.log(`[analyze] Starting analysis of ${files.length} files`)
   const withRange = files.filter(f => f.timeRange && f.sizeBytes !== null)
+  stageStart = logAnalyzeStage('filter ranged files', stageStart)
 
-  // Overlap detection
-  const overlapIds = new Set<string>()
-  for (let i = 0; i < withRange.length; i++) {
-    const a = withRange[i]
-    const [aStart, aEnd] = a.timeRange!
-    const aIsPoint = aStart === aEnd
-    for (let j = i + 1; j < withRange.length; j++) {
-      const b = withRange[j]
-      const [bStart, bEnd] = b.timeRange!
-      const bIsPoint = bStart === bEnd
-      const overlaps = (aIsPoint || bIsPoint)
-        ? aStart <= bEnd && bStart <= aEnd
-        : aStart < bEnd && bStart < aEnd
-      if (overlaps) {
-        overlapIds.add(a.fileId)
-        overlapIds.add(b.fileId)
-      }
-    }
-  }
+  const overlappingFiles = countOverlappingFiles(withRange)
+  stageStart = logAnalyzeStage('overlap detection', stageStart)
 
   // Overlap depth via sweep-line
   const events: Array<[number, number]> = []
@@ -658,6 +647,7 @@ export function analyze(files: AliveFile[]): AnalysisResult {
   }
 
   const avgDepth = coveredMs > 0 ? depthMs / coveredMs : 0
+  stageStart = logAnalyzeStage('overlap depth', stageStart)
 
   // Size CV
   const sizes = withRange.map(f => f.sizeBytes!).filter(s => s != null)
@@ -669,26 +659,113 @@ export function analyze(files: AliveFile[]): AnalysisResult {
       sizeCv = Math.sqrt(variance) / mean
     }
   }
+  stageStart = logAnalyzeStage('size coefficient variation', stageStart)
 
   // Source breakdown
   const sourceBreakdown: Record<string, number> = {}
   for (const f of files) {
     sourceBreakdown[f.source] = (sourceBreakdown[f.source] || 0) + 1
   }
+  stageStart = logAnalyzeStage('source breakdown', stageStart)
 
   // Size distribution (log-scale buckets)
   const sizeDistribution = buildSizeDistribution(withRange.map(f => f.sizeBytes!))
+  stageStart = logAnalyzeStage('size distribution', stageStart)
+
+  const totalFiles = files.length
+  const totalSizeBytes = files.reduce((sum, f) => sum + (f.sizeBytes ?? 0), 0)
+  logAnalyzeStage('total size', stageStart)
+  logAnalyzeStage('total', analyzeStart)
 
   return {
-    totalFiles: files.length,
-    totalSizeBytes: files.reduce((sum, f) => sum + (f.sizeBytes ?? 0), 0),
-    overlappingFiles: overlapIds.size,
+    totalFiles,
+    totalSizeBytes,
+    overlappingFiles,
     maxOverlapDepth: maxDepth,
     avgOverlapDepth: avgDepth,
     sizeCv,
     sourceBreakdown,
     sizeDistribution,
   }
+}
+
+function logAnalyzeStage(label: string, start: number): number {
+  const now = performance.now()
+  console.log(`[analyze] ${label}: ${(now - start).toFixed(1)} ms`)
+  return now
+}
+
+function countOverlappingFiles(files: AliveFile[]): number {
+  type Interval = { fileId: string; start: number; end: number }
+  type OverlapEvent = { time: number; starts: Interval[]; ends: string[]; points: string[] }
+
+  const events = new Map<number, OverlapEvent>()
+  const active = new Set<string>()
+  const unmarkedActive = new Set<string>()
+  const overlappingIds = new Set<string>()
+
+  function eventAt(time: number): OverlapEvent {
+    let event = events.get(time)
+    if (!event) {
+      event = { time, starts: [], ends: [], points: [] }
+      events.set(time, event)
+    }
+    return event
+  }
+
+  function markOverlapping(fileId: string): void {
+    overlappingIds.add(fileId)
+    unmarkedActive.delete(fileId)
+  }
+
+  function markUnmarkedActive(): void {
+    for (const fileId of unmarkedActive) overlappingIds.add(fileId)
+    unmarkedActive.clear()
+  }
+
+  for (const file of files) {
+    const [start, end] = file.timeRange!
+    if (start === end) {
+      eventAt(start).points.push(file.fileId)
+    } else {
+      const interval = { fileId: file.fileId, start, end }
+      eventAt(start).starts.push(interval)
+      eventAt(end).ends.push(file.fileId)
+    }
+  }
+
+  const overlapEvents = [...events.values()]
+  overlapEvents.sort((a, b) => a.time - b.time)
+
+  for (const event of overlapEvents) {
+    if (event.points.length > 0) {
+      if (active.size + event.starts.length > 0 || event.points.length > 1) {
+        for (const fileId of event.points) markOverlapping(fileId)
+      }
+      if (active.size + event.starts.length > 0) {
+        markUnmarkedActive()
+        for (const interval of event.starts) markOverlapping(interval.fileId)
+      }
+    }
+
+    for (const fileId of event.ends) {
+      active.delete(fileId)
+      unmarkedActive.delete(fileId)
+    }
+
+    if (event.starts.length > 0) {
+      if (active.size > 0 || event.starts.length > 1) {
+        markUnmarkedActive()
+        for (const interval of event.starts) markOverlapping(interval.fileId)
+      }
+      for (const interval of event.starts) {
+        active.add(interval.fileId)
+        if (!overlappingIds.has(interval.fileId)) unmarkedActive.add(interval.fileId)
+      }
+    }
+  }
+
+  return overlappingIds.size
 }
 
 function buildSizeDistribution(sizes: number[]): Array<{ label: string; count: number }> {

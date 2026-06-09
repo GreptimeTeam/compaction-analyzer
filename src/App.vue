@@ -67,6 +67,7 @@ export default defineComponent({
     }
 
     function handleFilesLoaded(result: { aliveFiles: AliveFile[] }) {
+      console.log(`[handleFilesLoaded] Loaded ${result.aliveFiles.length} alive files from input`)
       const map = new Map<string, AliveFile>()
       for (const file of result.aliveFiles) {
         map.set(file.fileId, file)

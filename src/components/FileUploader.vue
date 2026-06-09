@@ -64,10 +64,12 @@ export default defineComponent({
           onProgress: (progress) => { parseProgress.value = progress },
         })
         parseProgress.value = 100
+        console.log(`[processFile] Received parsing result of kind '${result.kind}' from worker`)
         if (result.kind === 'files') {
           if (result.result.aliveFiles.length === 0) {
             error.value = 'No alive files found in the input.'
           } else {
+            console.log(`[processFile] Parsed ${result.result.aliveFiles.length} alive files from input, emitting 'files-loaded' event`)
             emit('files-loaded', result.result)
           }
         }
@@ -75,6 +77,7 @@ export default defineComponent({
           if (result.result.totalTasks === 0) {
             error.value = 'No compaction process tasks found in the input.'
           } else {
+            console.log(`[processFile] Parsed ${result.result.totalTasks} compaction tasks from input, emitting 'processes-loaded' event`)
             emit('processes-loaded', result.result)
           }
         }

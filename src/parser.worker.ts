@@ -22,7 +22,12 @@ function postProgress(id: number, progress: number): void {
 function parseInput(request: ParseWorkerRequest): ParseWorkerResponse {
   switch (request.mode) {
     case 'alive-file-list':
-      return { id: request.id, ok: true, kind: 'files', result: parseAliveFileList(request.content) }
+      console.log(`[Worker] Parsing alive-file-list for request ${request.id}`)
+      const startTime = performance.now()
+      const v = parseAliveFileList(request.content)
+      const elapsedTime = performance.now() - startTime
+      console.log(`[Worker] Finished parsing alive-file-list for request ${request.id}, parsed ${v.aliveFiles.length} files, elapsed time: ${elapsedTime.toFixed(2)} ms`)
+      return { id: request.id, ok: true, kind: 'files', result: v }
     case 'compaction-log':
       return { id: request.id, ok: true, kind: 'files', result: parseLogCsv(request.content) }
     case 'compaction-process':
@@ -39,6 +44,7 @@ self.onmessage = (event: MessageEvent<ParseWorkerRequest>) => {
     const response = parseInput(request)
     postProgress(request.id, 100)
     self.postMessage(response)
+    console.log(`[Worker] Response for request ${request.id} posted successfully`)
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to parse input.'
     self.postMessage({ id: request.id, ok: false, error: message })

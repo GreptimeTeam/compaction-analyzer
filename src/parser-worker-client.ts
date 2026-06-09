@@ -32,20 +32,23 @@ export function parseInputInWorker(request: ParseInputRequest): Promise<ParseWor
   const worker = new Worker(new URL('./parser.worker.ts', import.meta.url), { type: 'module' })
 
   return new Promise((resolve, reject) => {
+    console.log(`[parseInputInWorker] 1. Sending request ${id} to worker with mode '${request.mode}'`)
     function finish(callback: () => void) {
       worker.terminate()
+      console.log(`[parseInputInWorker] 2. Worker for request ${id} terminated`)
       callback()
     }
 
     worker.onmessage = (event: MessageEvent<ParseWorkerResponse>) => {
       const response = event.data
+      console.log(`[Worker] Received response for request ${response.id}, ok: ${response.ok}`)
       if (response.id !== id) return
 
       if (response.ok && response.kind === 'progress') {
         request.onProgress?.(response.progress)
         return
       }
-
+      
       if (response.ok && response.kind === 'files') {
         finish(() => resolve({ kind: 'files', result: response.result }))
       } else if (response.ok && response.kind === 'processes') {
@@ -60,6 +63,7 @@ export function parseInputInWorker(request: ParseInputRequest): Promise<ParseWor
     }
 
     worker.postMessage({ id, mode: request.mode, content: request.content })
+    console.log(`[parseInputInWorker] 3. Request ${id} posted to worker with mode '${request.mode}'`)
   })
 }
 

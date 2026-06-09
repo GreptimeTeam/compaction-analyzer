@@ -7,6 +7,7 @@
     "dev": "vite --host 0.0.0.0",
     "build": "vue-tsc --noEmit && vite build",
     "test": "vitest run",
+    "bench:alive": "tsx scripts/bench-alive.mjs",
     "preview": "vite preview",
     "deploy": "npm run build && wrangler pages deploy dist"
   },
@@ -15,6 +16,7 @@
   },
   "devDependencies": {
     "@vitejs/plugin-vue": "^5.2.3",
+    "tsx": "^4.22.4",
     "typescript": "~5.7.0",
     "vite": "^6.3.2",
     "vitest": "^4.1.8",

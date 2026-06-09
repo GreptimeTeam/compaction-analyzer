@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { analyzeCompactionProcessTasks, analyzeCompactionProcesses, getMergeTimeSeverity, parseCompactionProcessTasksFromLog, parseLogCsv, sortCompactionProcessFiles, sortCompactionProcessTasks } from './parser'
+import source from './parser.ts?raw'
 
 describe('analyzeCompactionProcesses', () => {
   it('exposes task parsing separately so chunks can be analyzed after parallel parsing', () => {
@@ -173,6 +174,25 @@ describe('analyzeCompactionProcesses', () => {
     expect(sortCompactionProcessFiles(files, 'size', 'desc').map(file => file.sizeBytes)).toEqual([300, 200, 100])
     expect(sortCompactionProcessFiles(files, 'time-range', 'desc').map(file => file.timeRange[0])).toEqual([30, 20, 10])
     expect(sortCompactionProcessFiles(files, 'file-id', 'asc')).not.toBe(files)
+  })
+})
+
+describe('analyze overlap performance', () => {
+  it('uses a sweep-line overlap detector instead of pairwise file comparisons', () => {
+    expect(source).toContain('function countOverlappingFiles')
+    expect(source).toContain('overlapEvents.sort')
+    expect(source).not.toContain('for (let j = i + 1; j < withRange.length; j++)')
+  })
+
+  it('logs elapsed time for each analyze stage', () => {
+    expect(source).toContain('function logAnalyzeStage')
+    expect(source).toContain("logAnalyzeStage('filter ranged files'")
+    expect(source).toContain("logAnalyzeStage('overlap detection'")
+    expect(source).toContain("logAnalyzeStage('overlap depth'")
+    expect(source).toContain("logAnalyzeStage('size coefficient variation'")
+    expect(source).toContain("logAnalyzeStage('source breakdown'")
+    expect(source).toContain("logAnalyzeStage('size distribution'")
+    expect(source).toContain("logAnalyzeStage('total'")
   })
 })
 
