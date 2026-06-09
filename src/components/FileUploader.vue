@@ -1,6 +1,7 @@
 <script lang="ts">
 import { defineComponent, ref } from 'vue'
-import { analyzeCompactionProcesses, parseAliveFileList, parseLogCsv, type InputMode } from '../parser'
+import { parseInputInWorker } from '../parser-worker-client'
+import type { InputMode } from '../parser'
 
 export default defineComponent({
   name: 'FileUploader',
@@ -12,6 +13,7 @@ export default defineComponent({
     const error = ref<string | null>(null)
     const fileName = ref<string | null>(null)
     const loading = ref(false)
+    const parseProgress = ref(0)
     const pastedText = ref('')
     let fileContent: string | null = null
 
@@ -49,32 +51,31 @@ export default defineComponent({
       reader.readAsText(file)
     }
 
-    function processFile() {
+    async function processFile() {
       const content = inputMethod.value === 'paste' ? pastedText.value : fileContent
       if (!content) return
       loading.value = true
+      parseProgress.value = 0
       error.value = null
       try {
-        if (inputMode.value === 'alive-file-list') {
-          const result = parseAliveFileList(content)
-          if (result.aliveFiles.length === 0) {
+        const result = await parseInputInWorker({
+          mode: inputMode.value,
+          content,
+          onProgress: (progress) => { parseProgress.value = progress },
+        })
+        parseProgress.value = 100
+        if (result.kind === 'files') {
+          if (result.result.aliveFiles.length === 0) {
             error.value = 'No alive files found in the input.'
           } else {
-            emit('files-loaded', result)
+            emit('files-loaded', result.result)
           }
-        } else if (inputMode.value === 'compaction-log') {
-          const result = parseLogCsv(content)
-          if (result.aliveFiles.length === 0) {
-            error.value = 'No alive files found in the input.'
-          } else {
-            emit('files-loaded', result)
-          }
-        } else {
-          const result = analyzeCompactionProcesses(content)
-          if (result.totalTasks === 0) {
+        }
+        if (result.kind === 'processes') {
+          if (result.result.totalTasks === 0) {
             error.value = 'No compaction process tasks found in the input.'
           } else {
-            emit('processes-loaded', result)
+            emit('processes-loaded', result.result)
           }
         }
       } catch (e: any) {
@@ -84,7 +85,7 @@ export default defineComponent({
       }
     }
 
-    return { inputMode, inputMethod, dragover, error, fileName, loading, pastedText, inputModes, handleDrop, handleFileInput, processFile }
+    return { inputMode, inputMethod, dragover, error, fileName, loading, parseProgress, pastedText, inputModes, handleDrop, handleFileInput, processFile }
   }
 })
 </script>
@@ -172,9 +173,14 @@ export default defineComponent({
     <button
       class="analyze-btn"
       :disabled="(inputMethod === 'upload' ? !fileName : !pastedText.trim()) || loading"
+      :aria-valuenow="loading ? parseProgress : undefined"
+      aria-valuemin="0"
+      aria-valuemax="100"
       @click="processFile"
+      :role="loading ? 'progressbar' : undefined"
     >
-      {{ loading ? 'Parsing...' : 'Analyze' }}
+      <span v-if="loading" class="analyze-progress-fill" :style="{ width: `${parseProgress}%` }"></span>
+      <span class="analyze-btn-label">{{ loading ? `Parsing ${parseProgress}%` : 'Analyze' }}</span>
     </button>
   </div>
 </template>
@@ -435,6 +441,8 @@ export default defineComponent({
 }
 
 .analyze-btn {
+  position: relative;
+  overflow: hidden;
   width: 100%;
   padding: 12px;
   background: var(--primary);
@@ -446,6 +454,18 @@ export default defineComponent({
   font-weight: 600;
   cursor: pointer;
   transition: all 0.2s;
+}
+
+.analyze-progress-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: linear-gradient(90deg, var(--primary-hover), #60a5fa);
+  transition: width 0.2s ease;
+}
+
+.analyze-btn-label {
+  position: relative;
+  z-index: 1;
 }
 
 .analyze-btn:hover:not(:disabled) {

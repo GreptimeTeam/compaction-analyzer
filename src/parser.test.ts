@@ -1,7 +1,15 @@
 import { describe, expect, it } from 'vitest'
-import { analyzeCompactionProcessTasks, analyzeCompactionProcesses, getMergeTimeSeverity, parseLogCsv, sortCompactionProcessFiles, sortCompactionProcessTasks } from './parser'
+import { analyzeCompactionProcessTasks, analyzeCompactionProcesses, getMergeTimeSeverity, parseCompactionProcessTasksFromLog, parseLogCsv, sortCompactionProcessFiles, sortCompactionProcessTasks } from './parser'
 
 describe('analyzeCompactionProcesses', () => {
+  it('exposes task parsing separately so chunks can be analyzed after parallel parsing', () => {
+    const log = `
+2026-01-09T13:38:59.242654Z INFO mito2::compaction::task: Compacted SST files, region_id: 4398046511104(1024, 0), input: [FileMeta { file_id: 86aa8733-624c-4d24-9a0e-a7b82c360f56 , time_range: (2026-01-09 13:29:42.016+0000, 2026-01-09 13:33:42.361+0000) , level: 0, file_size: 177.5MiB }], output: [FileMeta { file_id: 24c730aa-b14b-43e8-8a34-1a0f6c8ed53e , time_range: (2026-01-09 13:29:42.016+0000, 2026-01-09 13:33:42.361+0000) , level: 1, file_size: 177.5MiB }], window: None, merge_time: 345ms
+`
+
+    expect(analyzeCompactionProcessTasks(parseCompactionProcessTasksFromLog(log))).toEqual(analyzeCompactionProcesses(log))
+  })
+
   it('summarizes compaction tasks from raw log text', () => {
     const log = `
 2026-01-09T13:38:59.242654Z INFO mito2::compaction::task: Compacted SST files, region_id: 4398046511104(1024, 0), input: [FileMeta { file_id: 86aa8733-624c-4d24-9a0e-a7b82c360f56 , time_range: (2026-01-09 13:29:42.016+0000, 2026-01-09 13:33:42.361+0000) , level: 0, file_size: 177.5MiB }, FileMeta { file_id: d3518a5a-ff01-46f6-b02a-a811649f4610 , time_range: (2026-01-09 12:57:43.308+0000, 2026-01-09 13:29:42.505+0000) , level: 1, file_size: 521.5MiB }], output: [FileMeta { file_id: 24c730aa-b14b-43e8-8a34-1a0f6c8ed53e , time_range: (2026-01-09 12:57:43.308+0000, 2026-01-09 13:33:42.361+0000) , level: 2, file_size: 666.0MiB }], window: None, pick_time: 12ms, merge_time: 345ms

@@ -227,11 +227,15 @@ export function parseLogCsv(log: string): ParseResult {
 }
 
 export function analyzeCompactionProcesses(log: string): CompactionProcessAnalysis {
-  const tasks = normalizeLogLines(log)
-    .map(parseCompactionProcessLine)
-    .filter((task): task is CompactionProcessTask => task !== null)
+  const tasks = parseCompactionProcessTasksFromLog(log)
 
   return analyzeCompactionProcessTasks(tasks)
+}
+
+export function parseCompactionProcessTasksFromLog(log: string): CompactionProcessTask[] {
+  return normalizeLogLines(log)
+    .map(parseCompactionProcessLine)
+    .filter((task): task is CompactionProcessTask => task !== null)
 }
 
 export function analyzeCompactionProcessTasks(tasks: CompactionProcessTask[]): CompactionProcessAnalysis {
