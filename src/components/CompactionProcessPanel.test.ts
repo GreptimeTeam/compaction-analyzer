@@ -21,6 +21,14 @@ describe('CompactionProcessPanel table', () => {
     expect(source).toContain("const outputFileSortDirection = ref<SortDirection>('asc')")
   })
 
+  it('orders process table compactions by timestamp ascending by default', () => {
+    expect(source).toContain("const sortKey = ref<CompactionProcessSortKey>('time')")
+    expect(source).toContain("const sortDirection = ref<SortDirection>('asc')")
+    expect(source).toContain("sortDirection.value = 'asc'")
+    expect(source).not.toContain("const sortDirection = ref<SortDirection>('desc')")
+    expect(source).not.toContain("sortDirection.value = key === 'time' ? 'desc' : 'asc'")
+  })
+
   it('precomputes merge severity for table rows instead of sorting per row', () => {
     expect(source).toContain('getMergeTimeSeverityMap')
     expect(source).toContain('const mergeTimeSeverities = computed(() => getMergeTimeSeverityMap(props.analysis.tasks))')

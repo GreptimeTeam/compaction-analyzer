@@ -58,7 +58,7 @@ export default defineComponent({
     const showGraph = ref(false)
     const visualizedTasks = ref<CompactionProcessTask[]>([])
     const sortKey = ref<CompactionProcessSortKey>('time')
-    const sortDirection = ref<SortDirection>('desc')
+    const sortDirection = ref<SortDirection>('asc')
     const processFileSearch = ref('')
     const inputFileSortKey = ref<CompactionProcessFileSortKey>('time-range')
     const inputFileSortDirection = ref<SortDirection>('asc')
@@ -307,7 +307,7 @@ export default defineComponent({
         sortDirection.value = sortDirection.value === 'asc' ? 'desc' : 'asc'
       } else {
         sortKey.value = key
-        sortDirection.value = key === 'time' ? 'desc' : 'asc'
+        sortDirection.value = 'asc'
       }
     }
 
