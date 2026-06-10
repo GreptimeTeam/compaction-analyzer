@@ -60,6 +60,8 @@ export default defineComponent({
     const sortKey = ref<CompactionProcessSortKey>('time')
     const sortDirection = ref<SortDirection>('asc')
     const processFileSearch = ref('')
+    const processFileTimeStart = ref('')
+    const processFileTimeEnd = ref('')
     const inputFileSortKey = ref<CompactionProcessFileSortKey>('time-range')
     const inputFileSortDirection = ref<SortDirection>('asc')
     const outputFileSortKey = ref<CompactionProcessFileSortKey>('time-range')
@@ -127,7 +129,8 @@ export default defineComponent({
       }
       return taskIds
     })
-    const tableTasks = computed(() => sortedTasks.value.filter(task => searchedTaskKeys.value.has(taskKey(task))))
+    const timeFilteredTasks = computed(() => sortedTasks.value.filter(taskMatchesFileTimeRangeFilter))
+    const tableTasks = computed(() => timeFilteredTasks.value.filter(task => searchedTaskKeys.value.has(taskKey(task))))
     const defaultExpandedTaskKey = computed(() => tableTasks.value.find(task => directlyMatchedTaskKeys.value.has(taskKey(task))) ? taskKey(tableTasks.value.find(task => directlyMatchedTaskKeys.value.has(taskKey(task)))!) : null)
     const graphLayoutTasks = computed(() => visualizedTasks.value)
     const graphHeight = computed(() => Math.max(360, graphLayoutTasks.value.length * 150 + 80))
@@ -273,7 +276,7 @@ export default defineComponent({
     onBeforeUnmount(() => {
       window.removeEventListener('resize', refreshGraphViewport)
     })
-    watch(processFileSearch, () => {
+    watch([processFileSearch, processFileTimeStart, processFileTimeEnd], () => {
       expandedTaskKey.value = null
       showGraph.value = false
       visualizedTasks.value = []
@@ -357,6 +360,22 @@ export default defineComponent({
     function fileMatchesSearch(file: CompactionProcessFile): boolean {
       const query = processFileSearch.value.trim().toLowerCase()
       return query !== '' && file.fileId.toLowerCase().includes(query)
+    }
+
+    function fileTimeFilterBound(value: string, fallback: number): number {
+      const parsed = value === '' ? Number.NaN : new Date(value).getTime()
+      return Number.isFinite(parsed) ? parsed : fallback
+    }
+
+    function fileOverlapsTimeRangeFilter(file: CompactionProcessFile): boolean {
+      const filterStart = fileTimeFilterBound(processFileTimeStart.value, Number.NEGATIVE_INFINITY)
+      const filterEnd = fileTimeFilterBound(processFileTimeEnd.value, Number.POSITIVE_INFINITY)
+      return file.timeRange[0] <= filterEnd && file.timeRange[1] >= filterStart
+    }
+
+    function taskMatchesFileTimeRangeFilter(task: CompactionProcessTask): boolean {
+      if (!processFileTimeStart.value && !processFileTimeEnd.value) return true
+      return [...task.inputFiles, ...task.outputFiles].some(fileOverlapsTimeRangeFilter)
     }
 
     function isDirectFileMatch(task: CompactionProcessTask): boolean {
@@ -776,7 +795,7 @@ updateTransform()
       graphDidDrag.value = false
     }
 
-    return { clearGraphSelection, clearGraphTrace, directlyMatchedTaskKeys, expandedTaskKey, fileMatchesSearch, fileNodeClass, fileNodeRadius, fileNodeX, fileNodeY, fileSortMark, fileTimeEnd, fileTimeRange, fileTimeStart, formatBytes, formatDuration, formatNum, formatMaybeDuration, graphCanvasRef, graphFileLabel, graphFileShortLabel, graphFileNodeClass, graphHeight, graphLayout, graphLinkPath, graphMinimapViewport, graphRowY, graphScale, graphPan, graphSvgRef, graphTasks, graphTransform, handleGraphPointerCancel, handleGraphPointerDown, handleGraphPointerMove, handleGraphPointerUp, handleGraphWheel, isDirectFileMatch, isGraphDragging, isTaskExpanded, lineageLinks, lineagePath, mergeTimeClass, prepareGraphFileSelection, prepareGraphTaskSelection, processFileSearch, refreshGraphViewport, selectedGraphNode, selectedGraphPopoverStyle, selectGraphFile, selectGraphTask, setFileSort, setSort, showGraph, showGraphMinimap, sortedFiles, sortedTasks, sortMark, tableTasks, taskKey, taskNodeX, taskTime, toggleTask, traceGraphNode, tracedGraphNode, visualizeTableTasks, visualizedTasks }
+    return { clearGraphSelection, clearGraphTrace, directlyMatchedTaskKeys, expandedTaskKey, fileMatchesSearch, fileNodeClass, fileNodeRadius, fileNodeX, fileNodeY, fileSortMark, fileTimeEnd, fileTimeRange, fileTimeStart, formatBytes, formatDuration, formatNum, formatMaybeDuration, graphCanvasRef, graphFileLabel, graphFileShortLabel, graphFileNodeClass, graphHeight, graphLayout, graphLinkPath, graphMinimapViewport, graphRowY, graphScale, graphPan, graphSvgRef, graphTasks, graphTransform, handleGraphPointerCancel, handleGraphPointerDown, handleGraphPointerMove, handleGraphPointerUp, handleGraphWheel, isDirectFileMatch, isGraphDragging, isTaskExpanded, lineageLinks, lineagePath, mergeTimeClass, prepareGraphFileSelection, prepareGraphTaskSelection, processFileSearch, processFileTimeEnd, processFileTimeStart, refreshGraphViewport, selectedGraphNode, selectedGraphPopoverStyle, selectGraphFile, selectGraphTask, setFileSort, setSort, showGraph, showGraphMinimap, sortedFiles, sortedTasks, sortMark, tableTasks, taskKey, taskNodeX, taskTime, toggleTask, traceGraphNode, tracedGraphNode, visualizeTableTasks, visualizedTasks }
   },
 })
 </script>
@@ -833,12 +852,20 @@ updateTransform()
      <section class="task-table-wrap">
        <h3>Compaction Tasks</h3>
        <div class="process-search">
-         <label>
-           <span>Search input file lineage</span>
-           <input v-model="processFileSearch" type="search" placeholder="Enter file id or fragment" />
-         </label>
-         <button class="visualize-button" type="button" @click="visualizeTableTasks">Visualize</button>
-       </div>
+          <label>
+            <span>Search input file lineage</span>
+            <input v-model="processFileSearch" type="search" placeholder="Enter file id or fragment" />
+          </label>
+          <label>
+            <span>File time start</span>
+            <input v-model="processFileTimeStart" type="text" placeholder="2024-12-05T07:18:29Z" />
+          </label>
+          <label>
+            <span>File time end</span>
+            <input v-model="processFileTimeEnd" type="text" placeholder="2024-12-05T07:18:29Z" />
+          </label>
+          <button class="visualize-button" type="button" @click="visualizeTableTasks">Visualize</button>
+        </div>
        <div class="task-table">
         <div class="task-row header">
           <button class="sort-header" @click="setSort('time')">Time {{ sortMark('time') }}</button>
